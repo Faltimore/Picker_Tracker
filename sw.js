@@ -1,4 +1,4 @@
-const CACHE_NAME = "picker-tracker-v1";
+const CACHE_NAME = "picker-tracker-v2";
 const ASSETS = [
   "./",
   "./index.html",

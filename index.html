@@ -173,10 +173,13 @@
       // ─── CSV ───
       const exportCSV = (data) => {
         if (!data || data.length === 0) return notify("No data to export", "error");
+        const pickerFilter = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
         let csv = "Date,Picker,Picker ID,Bucket #,Weight (kg),Time\n";
         data.forEach((day) => {
           day.activePickers.forEach((pid) => {
             const nm = day.pickerNames[pid] || pid;
+            // Skip pickers that don't match the name filter
+            if (pickerFilter && !nm.toLowerCase().includes(pickerFilter)) return;
             const bk = day.entries[pid] || [];
             if (bk.length === 0) csv += `${day.date},${nm},,0,0,\n`;
             else bk.forEach((b, i) => { csv += `${day.date},${nm},,${i + 1},${b.weight},${b.time || ""}\n`; });
@@ -429,7 +432,14 @@
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <span style={{ color: C.textDim, fontSize: 13 }}>
                   {isFiltered ? `Showing ${filtered.length} of ${history.length} day${history.length !== 1 ? "s" : ""}` : `${history.length} day${history.length !== 1 ? "s" : ""} recorded`}
-                  {filtered.length > 0 && ` — ${filtered.reduce((s, d) => s + dayTotal(d), 0).toFixed(1)} kg total`}
+                  {filtered.length > 0 && (() => {
+                    const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
+                    const total = filtered.reduce((s, d) => {
+                      const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers;
+                      return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0);
+                    }, 0);
+                    return ` — ${total.toFixed(1)} kg total`;
+                  })()}
                 </span>
                 <button onClick={() => exportCSV(filtered)} disabled={filtered.length === 0}
                   style={{ ...baseBtn, padding: "10px 18px", background: filtered.length > 0 ? C.green : C.surfaceAlt, color: filtered.length > 0 ? C.white : C.textMuted, fontSize: 13 }}>
@@ -447,16 +457,21 @@
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {filtered.map((day, di) => {
                     const isExp = expandedDay === di;
+                    const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
+                    const visiblePickers = pf
+                      ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pf))
+                      : day.activePickers;
+                    const visibleTotal = visiblePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
                     return (
                       <div key={di} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
                         <button onClick={() => setExpandedDay(isExp ? null : di)}
                           style={{ ...baseBtn, width: "100%", padding: "14px 18px", background: "transparent", borderRadius: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <div style={{ textAlign: "left" }}>
                             <div style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{formatDate(day.date)}</div>
-                            <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{day.activePickers.length} picker{day.activePickers.length !== 1 ? "s" : ""}</div>
+                            <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{visiblePickers.length} picker{visiblePickers.length !== 1 ? "s" : ""}{pf ? " (filtered)" : ""}</div>
                           </div>
                           <div style={{ textAlign: "right" }}>
-                            <div style={{ color: C.accent, fontWeight: 800, fontSize: 18 }}>{dayTotal(day).toFixed(1)} kg</div>
+                            <div style={{ color: C.accent, fontWeight: 800, fontSize: 18 }}>{visibleTotal.toFixed(1)} kg</div>
                             <div style={{ color: C.textMuted, fontSize: 11 }}>{isExp ? "▲ collapse" : "▼ tap for details"}</div>
                           </div>
                         </button>
@@ -467,7 +482,7 @@
                                 <thead>
                                   <tr>
                                     <th style={{ padding: 8, color: C.textMuted, textAlign: "left", borderBottom: `1px solid ${C.border}`, fontSize: 10 }}>#</th>
-                                    {day.activePickers.map((pid) => (
+                                    {visiblePickers.map((pid) => (
                                       <th key={pid} style={{ padding: 8, color: C.accent, fontWeight: 700, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>
                                         {day.pickerNames[pid] || pid}
                                       </th>
@@ -475,10 +490,10 @@
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {Array.from({ length: Math.max(1, ...day.activePickers.map((pid) => (day.entries[pid] || []).length)) }, (_, i) => (
+                                  {Array.from({ length: Math.max(1, ...visiblePickers.map((pid) => (day.entries[pid] || []).length)) }, (_, i) => (
                                     <tr key={i} style={{ background: i % 2 === 0 ? C.surface : C.surfaceAlt }}>
                                       <td style={{ padding: "6px 8px", color: C.textMuted, borderBottom: `1px solid ${C.border}`, fontSize: 10 }}>{i + 1}</td>
-                                      {day.activePickers.map((pid) => {
+                                      {visiblePickers.map((pid) => {
                                         const b = (day.entries[pid] || [])[i];
                                         return (
                                           <td key={pid} style={{ padding: "6px 8px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.text, fontSize: 12 }}>
@@ -490,7 +505,7 @@
                                   ))}
                                   <tr style={{ background: C.surfaceAlt }}>
                                     <td style={{ padding: "10px 8px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 10 }}>TOTAL</td>
-                                    {day.activePickers.map((pid) => (
+                                    {visiblePickers.map((pid) => (
                                       <td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 14 }}>
                                         {pickerTotal(day.entries, pid).toFixed(1)} kg
                                         <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 400 }}>{(day.entries[pid] || []).length} buckets</div>
