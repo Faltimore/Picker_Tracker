@@ -227,16 +227,36 @@
           });
           startRow++;
 
-          // Totals row
-          const totalStyle = { font: { bold: true, sz: 12, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "E8A838" } }, alignment: { horizontal: "center" } };
-          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "TOTAL", s: totalStyle };
-          let grandTotal = 0;
+          // Gross row
+          const grossStyle = { font: { bold: true, sz: 12, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "E8A838" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "GROSS", s: grossStyle };
+          let grandGross = 0;
           vp.forEach((pid, ci) => {
             const t = pickerTotal(day.entries, pid);
-            grandTotal += t;
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: t, s: totalStyle };
+            grandGross += t;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(t.toFixed(1)), s: grossStyle };
           });
-          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: grandTotal, s: { font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat(grandGross.toFixed(1)), s: grossStyle };
+          startRow++;
+
+          // Wastage row
+          const wastageStyle = { font: { bold: true, color: { rgb: "E05555" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "WASTAGE (10%)", s: wastageStyle };
+          vp.forEach((pid, ci) => {
+            const w = pickerTotal(day.entries, pid) * WASTAGE_RATE;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((-w).toFixed(1)), s: wastageStyle };
+          });
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((-grandGross * WASTAGE_RATE).toFixed(1)), s: wastageStyle };
+          startRow++;
+
+          // Nett row
+          const nettStyle = { font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "NETT", s: nettStyle };
+          vp.forEach((pid, ci) => {
+            const n = pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE);
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(n.toFixed(1)), s: nettStyle };
+          });
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((grandGross * (1 - WASTAGE_RATE)).toFixed(1)), s: nettStyle };
           startRow++;
 
           // Update sheet range
@@ -339,25 +359,30 @@
         wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Picker Summary", s: { font: { bold: true, sz: 16 } } };
         row += 2;
         const sumHdr = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
-        ["Picker", "Days Worked", "Total Buckets", "Total kg", "Avg kg/Day", "Avg kg/Bucket"].forEach((h, ci) => {
+        ["Picker", "Days Worked", "Total Buckets", "Gross kg", "Wastage kg", "Nett kg", "Avg Nett/Day", "Avg Nett/Bucket"].forEach((h, ci) => {
           wsSummary[XLSX.utils.encode_cell({ r: row, c: ci })] = { v: h, s: sumHdr };
         });
         row++;
 
+        const ctr = { alignment: { horizontal: "center" } };
         allPids.forEach((info) => {
-          const avgDay = info.days > 0 ? (info.totalKg / info.days).toFixed(1) : "0";
-          const avgBucket = info.totalBuckets > 0 ? (info.totalKg / info.totalBuckets).toFixed(1) : "0";
+          const wastage = info.totalKg * WASTAGE_RATE;
+          const nett = info.totalKg * (1 - WASTAGE_RATE);
+          const avgDay = info.days > 0 ? (nett / info.days).toFixed(1) : "0";
+          const avgBucket = info.totalBuckets > 0 ? (nett / info.totalBuckets).toFixed(1) : "0";
           wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: info.name };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: info.days, s: { alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 2 })] = { v: info.totalBuckets, s: { alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: info.days, s: ctr };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 2 })] = { v: info.totalBuckets, s: ctr };
           wsSummary[XLSX.utils.encode_cell({ r: row, c: 3 })] = { v: parseFloat(info.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 4 })] = { v: parseFloat(avgDay), s: { alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 5 })] = { v: parseFloat(avgBucket), s: { alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 4 })] = { v: parseFloat((-wastage).toFixed(1)), s: { font: { color: { rgb: "E05555" } }, alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 5 })] = { v: parseFloat(nett.toFixed(1)), s: { font: { bold: true, color: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 6 })] = { v: parseFloat(avgDay), s: ctr };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 7 })] = { v: parseFloat(avgBucket), s: ctr };
           row++;
         });
 
-        wsSummary["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row - 1, c: 5 } });
-        wsSummary["!cols"] = [{ wch: 25 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+        wsSummary["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row - 1, c: 7 } });
+        wsSummary["!cols"] = [{ wch: 25 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
         XLSX.utils.book_append_sheet(wb, wsSummary, "Picker Summary");
 
         // ── Download ──
@@ -377,6 +402,7 @@
 
       const pickerTotal = (entries, pid) => (entries[pid] || []).reduce((s, b) => s + b.weight, 0);
       const dayTotal = (day) => day.activePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
+      const WASTAGE_RATE = 0.10;
 
       const isFiltered = historyFilter.picker || historyFilter.dateFrom || historyFilter.dateTo;
       const filtered = getFiltered();
@@ -538,15 +564,41 @@
                         ))}
                       </tr>
 
+                      {/* ── GROSS ROW ── */}
                       <tr style={{ background: C.surfaceAlt }}>
-                        <td style={{ padding: "12px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 12 }}>TOTAL</td>
+                        <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 11 }}>GROSS</td>
                         {ap.map((pid) => {
                           const t = pickerTotal(entries, pid);
                           const c = (entries[pid] || []).length;
                           return (
-                            <td key={pid} style={{ padding: "12px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}` }}>
-                              <div style={{ color: C.accent, fontWeight: 800, fontSize: 18 }}>{t.toFixed(1)} kg</div>
+                            <td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}` }}>
+                              <div style={{ color: C.accent, fontWeight: 800, fontSize: 16 }}>{t.toFixed(1)} kg</div>
                               <div style={{ color: C.textMuted, fontSize: 10 }}>{c} bucket{c !== 1 ? "s" : ""}</div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {/* ── WASTAGE ROW ── */}
+                      <tr style={{ background: C.surface }}>
+                        <td style={{ padding: "8px 12px", color: C.red, fontWeight: 700, fontSize: 11 }}>WASTAGE</td>
+                        {ap.map((pid) => {
+                          const w = pickerTotal(entries, pid) * WASTAGE_RATE;
+                          return (
+                            <td key={pid} style={{ padding: "8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 14 }}>
+                              -{w.toFixed(1)} kg
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {/* ── NETT ROW ── */}
+                      <tr style={{ background: C.surfaceAlt }}>
+                        <td style={{ padding: "10px 12px", color: C.green, fontWeight: 800, fontSize: 11 }}>NETT</td>
+                        {ap.map((pid) => {
+                          const t = pickerTotal(entries, pid);
+                          const n = t * (1 - WASTAGE_RATE);
+                          return (
+                            <td key={pid} style={{ padding: "10px 8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 18 }}>
+                              {n.toFixed(1)} kg
                             </td>
                           );
                         })}
@@ -555,12 +607,28 @@
                   </table>
                 </div>
 
-                <div style={{ marginTop: 16, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ color: C.accent, fontWeight: 700, fontSize: 14 }}>GRAND TOTAL</span>
-                  <span style={{ color: C.accent, fontWeight: 800, fontSize: 24 }}>
-                    {ap.reduce((s, pid) => s + pickerTotal(entries, pid), 0).toFixed(1)} kg
-                  </span>
-                </div>
+                {/* ── GRAND TOTALS ── */}
+                {(() => {
+                  const grossTotal = ap.reduce((s, pid) => s + pickerTotal(entries, pid), 0);
+                  const wastageTotal = grossTotal * WASTAGE_RATE;
+                  const nettTotal = grossTotal * (1 - WASTAGE_RATE);
+                  return (
+                    <div style={{ marginTop: 16, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ color: C.accent, fontWeight: 700, fontSize: 13 }}>GRAND GROSS</span>
+                        <span style={{ color: C.accent, fontWeight: 800, fontSize: 20 }}>{grossTotal.toFixed(1)} kg</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE * 100).toFixed(0)}%)</span>
+                        <span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{wastageTotal.toFixed(1)} kg</span>
+                      </div>
+                      <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>GRAND NETT</span>
+                        <span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{nettTotal.toFixed(1)} kg</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -610,7 +678,7 @@
                       const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers;
                       return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0);
                     }, 0);
-                    return ` — ${total.toFixed(1)} kg total`;
+                    return ` — Gross: ${total.toFixed(1)} kg / Nett: ${(total * (1 - WASTAGE_RATE)).toFixed(1)} kg`;
                   })()}
                 </span>
                 <button onClick={() => exportExcel(filtered)} disabled={filtered.length === 0}
@@ -634,6 +702,7 @@
                       ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pf))
                       : day.activePickers;
                     const visibleTotal = visiblePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
+                    const visibleNett = visibleTotal * (1 - WASTAGE_RATE);
                     return (
                       <div key={di} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
                         <button onClick={() => setExpandedDay(isExp ? null : di)}
@@ -643,7 +712,8 @@
                             <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{visiblePickers.length} picker{visiblePickers.length !== 1 ? "s" : ""}{pf ? " (filtered)" : ""}</div>
                           </div>
                           <div style={{ textAlign: "right" }}>
-                            <div style={{ color: C.accent, fontWeight: 800, fontSize: 18 }}>{visibleTotal.toFixed(1)} kg</div>
+                            <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {visibleTotal.toFixed(1)} kg</div>
+                            <div style={{ color: C.green, fontWeight: 800, fontSize: 18 }}>Nett: {visibleNett.toFixed(1)} kg</div>
                             <div style={{ color: C.textMuted, fontSize: 11 }}>{isExp ? "▲ collapse" : "▼ tap for details"}</div>
                           </div>
                         </button>
@@ -675,12 +745,31 @@
                                       })}
                                     </tr>
                                   ))}
+                                  {/* ── GROSS ── */}
                                   <tr style={{ background: C.surfaceAlt }}>
-                                    <td style={{ padding: "10px 8px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 10 }}>TOTAL</td>
+                                    <td style={{ padding: "8px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 10 }}>GROSS</td>
                                     {visiblePickers.map((pid) => (
-                                      <td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 14 }}>
+                                      <td key={pid} style={{ padding: "8px", textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 13 }}>
                                         {pickerTotal(day.entries, pid).toFixed(1)} kg
                                         <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 400 }}>{(day.entries[pid] || []).length} buckets</div>
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  {/* ── WASTAGE ── */}
+                                  <tr style={{ background: C.surface }}>
+                                    <td style={{ padding: "6px 8px", color: C.red, fontWeight: 700, fontSize: 10 }}>WASTAGE</td>
+                                    {visiblePickers.map((pid) => (
+                                      <td key={pid} style={{ padding: "6px 8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 12 }}>
+                                        -{(pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)} kg
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  {/* ── NETT ── */}
+                                  <tr style={{ background: C.surfaceAlt }}>
+                                    <td style={{ padding: "8px", color: C.green, fontWeight: 800, fontSize: 10 }}>NETT</td>
+                                    {visiblePickers.map((pid) => (
+                                      <td key={pid} style={{ padding: "8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 14 }}>
+                                        {(pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)} kg
                                       </td>
                                     ))}
                                   </tr>
