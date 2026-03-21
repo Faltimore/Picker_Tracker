@@ -31,6 +31,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
@@ -170,27 +171,198 @@
         setConfirmAction(null);
       };
 
-      // ─── CSV ───
-      const exportCSV = (data) => {
+      // ─── Excel Export ───
+      const exportExcel = (data) => {
         if (!data || data.length === 0) return notify("No data to export", "error");
         const pickerFilter = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
-        let csv = "Date,Picker,Picker ID,Bucket #,Weight (kg),Time\n";
+        const wb = XLSX.utils.book_new();
+
+        // ── Helper: build a day table starting at a given row ──
+        const buildDayTable = (ws, day, startRow) => {
+          const vp = pickerFilter
+            ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter))
+            : day.activePickers;
+          if (vp.length === 0) return startRow;
+
+          const maxBuckets = Math.max(1, ...vp.map((pid) => (day.entries[pid] || []).length));
+
+          // Date header row
+          const dateCell = XLSX.utils.encode_cell({ r: startRow, c: 0 });
+          ws[dateCell] = { v: formatDate(day.date), s: { font: { bold: true, sz: 13 } } };
+          if (!ws["!merges"]) ws["!merges"] = [];
+          ws["!merges"].push({ s: { r: startRow, c: 0 }, e: { r: startRow, c: vp.length } });
+          startRow++;
+
+          // Column headers: # | Picker1 | Picker2 | ... | Day Total
+          const hdrStyle = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "#", s: hdrStyle };
+          vp.forEach((pid, ci) => {
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: day.pickerNames[pid] || pid, s: hdrStyle };
+          });
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: "Row Total", s: hdrStyle };
+          startRow++;
+
+          // Bucket rows
+          const dataStyle = { alignment: { horizontal: "center" } };
+          const altStyle = { alignment: { horizontal: "center" }, fill: { fgColor: { rgb: "F2F2F2" } } };
+          for (let i = 0; i < maxBuckets; i++) {
+            const rowStyle = i % 2 === 0 ? dataStyle : altStyle;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: i + 1, s: rowStyle };
+            let rowSum = 0;
+            vp.forEach((pid, ci) => {
+              const bk = (day.entries[pid] || [])[i];
+              const val = bk ? bk.weight : "";
+              ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: val, s: rowStyle };
+              if (bk) rowSum += bk.weight;
+            });
+            ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: rowSum || "", s: rowStyle };
+            startRow++;
+          }
+
+          // Bucket count row
+          const countStyle = { font: { italic: true, color: { rgb: "888888" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "Buckets", s: { font: { bold: true, italic: true, color: { rgb: "888888" } } } };
+          vp.forEach((pid, ci) => {
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: (day.entries[pid] || []).length, s: countStyle };
+          });
+          startRow++;
+
+          // Totals row
+          const totalStyle = { font: { bold: true, sz: 12, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "E8A838" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "TOTAL", s: totalStyle };
+          let grandTotal = 0;
+          vp.forEach((pid, ci) => {
+            const t = pickerTotal(day.entries, pid);
+            grandTotal += t;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: t, s: totalStyle };
+          });
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: grandTotal, s: { font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } };
+          startRow++;
+
+          // Update sheet range
+          const maxCol = vp.length + 1;
+          const curRef = ws["!ref"];
+          const newRef = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: startRow - 1, c: maxCol } });
+          ws["!ref"] = curRef ? (XLSX.utils.decode_range(curRef).e.r < startRow - 1 || XLSX.utils.decode_range(curRef).e.c < maxCol ? newRef : curRef) : newRef;
+
+          return startRow + 1; // gap between tables
+        };
+
+        // ── Group days by week and month ──
+        const groupByWeek = (days) => {
+          const weeks = {};
+          days.forEach((day) => {
+            const d = new Date(day.date + "T12:00:00");
+            const jan1 = new Date(d.getFullYear(), 0, 1);
+            const weekNum = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+            const key = `Week ${weekNum} (${d.getFullYear()})`;
+            if (!weeks[key]) weeks[key] = [];
+            weeks[key].push(day);
+          });
+          return weeks;
+        };
+
+        const groupByMonth = (days) => {
+          const months = {};
+          days.forEach((day) => {
+            const d = new Date(day.date + "T12:00:00");
+            const key = d.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+            if (!months[key]) months[key] = [];
+            months[key].push(day);
+          });
+          return months;
+        };
+
+        // ── Sheet 1: Daily View (each day as its own table) ──
+        const wsDays = {};
+        let row = 0;
+        // Title
+        wsDays[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Daily Picking Records", s: { font: { bold: true, sz: 16 } } };
+        wsDays["!ref"] = "A1";
+        row += 2;
+        data.forEach((day) => { row = buildDayTable(wsDays, day, row); });
+        // Set column widths
+        wsDays["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
+        XLSX.utils.book_append_sheet(wb, wsDays, "Daily");
+
+        // ── Sheet 2: Weekly Summary ──
+        const weeks = groupByWeek(data);
+        const wsWeeks = {};
+        row = 0;
+        wsWeeks[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Weekly Summary", s: { font: { bold: true, sz: 16 } } };
+        wsWeeks["!ref"] = "A1";
+        row += 2;
+        Object.entries(weeks).forEach(([weekLabel, days]) => {
+          wsWeeks[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: weekLabel, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } };
+          wsWeeks["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } });
+          row += 1;
+          days.forEach((day) => { row = buildDayTable(wsWeeks, day, row); });
+          row += 1; // extra gap between weeks
+        });
+        wsWeeks["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
+        XLSX.utils.book_append_sheet(wb, wsWeeks, "Weekly");
+
+        // ── Sheet 3: Monthly Summary ──
+        const months = groupByMonth(data);
+        const wsMonths = {};
+        row = 0;
+        wsMonths[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Monthly Summary", s: { font: { bold: true, sz: 16 } } };
+        wsMonths["!ref"] = "A1";
+        row += 2;
+        Object.entries(months).forEach(([monthLabel, days]) => {
+          wsMonths[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: monthLabel, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } };
+          wsMonths["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } });
+          row += 1;
+          days.forEach((day) => { row = buildDayTable(wsMonths, day, row); });
+          row += 1;
+        });
+        wsMonths["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
+        XLSX.utils.book_append_sheet(wb, wsMonths, "Monthly");
+
+        // ── Sheet 4: Picker Totals (summary per picker across all days) ──
+        const wsSummary = {};
+        const allPids = new Map();
         data.forEach((day) => {
-          day.activePickers.forEach((pid) => {
-            const nm = day.pickerNames[pid] || pid;
-            // Skip pickers that don't match the name filter
-            if (pickerFilter && !nm.toLowerCase().includes(pickerFilter)) return;
-            const bk = day.entries[pid] || [];
-            if (bk.length === 0) csv += `${day.date},${nm},,0,0,\n`;
-            else bk.forEach((b, i) => { csv += `${day.date},${nm},,${i + 1},${b.weight},${b.time || ""}\n`; });
+          const vp = pickerFilter
+            ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter))
+            : day.activePickers;
+          vp.forEach((pid) => {
+            if (!allPids.has(pid)) allPids.set(pid, { name: day.pickerNames[pid] || pid, totalKg: 0, totalBuckets: 0, days: 0 });
+            const info = allPids.get(pid);
+            info.totalKg += pickerTotal(day.entries, pid);
+            info.totalBuckets += (day.entries[pid] || []).length;
+            info.days++;
           });
         });
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = `picking-records-${today()}.csv`; a.click();
-        URL.revokeObjectURL(url);
-        notify("CSV saved to Downloads", "success");
+
+        row = 0;
+        wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Picker Summary", s: { font: { bold: true, sz: 16 } } };
+        row += 2;
+        const sumHdr = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
+        ["Picker", "Days Worked", "Total Buckets", "Total kg", "Avg kg/Day", "Avg kg/Bucket"].forEach((h, ci) => {
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: ci })] = { v: h, s: sumHdr };
+        });
+        row++;
+
+        allPids.forEach((info) => {
+          const avgDay = info.days > 0 ? (info.totalKg / info.days).toFixed(1) : "0";
+          const avgBucket = info.totalBuckets > 0 ? (info.totalKg / info.totalBuckets).toFixed(1) : "0";
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: info.name };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: info.days, s: { alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 2 })] = { v: info.totalBuckets, s: { alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 3 })] = { v: parseFloat(info.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 4 })] = { v: parseFloat(avgDay), s: { alignment: { horizontal: "center" } } };
+          wsSummary[XLSX.utils.encode_cell({ r: row, c: 5 })] = { v: parseFloat(avgBucket), s: { alignment: { horizontal: "center" } } };
+          row++;
+        });
+
+        wsSummary["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row - 1, c: 5 } });
+        wsSummary["!cols"] = [{ wch: 25 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, wsSummary, "Picker Summary");
+
+        // ── Download ──
+        XLSX.writeFile(wb, `picking-records-${today()}.xlsx`);
+        notify("Excel saved to Downloads", "success");
       };
 
       const getFiltered = () => history.filter((day) => {
@@ -441,9 +613,9 @@
                     return ` — ${total.toFixed(1)} kg total`;
                   })()}
                 </span>
-                <button onClick={() => exportCSV(filtered)} disabled={filtered.length === 0}
+                <button onClick={() => exportExcel(filtered)} disabled={filtered.length === 0}
                   style={{ ...baseBtn, padding: "10px 18px", background: filtered.length > 0 ? C.green : C.surfaceAlt, color: filtered.length > 0 ? C.white : C.textMuted, fontSize: 13 }}>
-                  ⤓ Export {isFiltered ? "Filtered" : "All"} as CSV
+                  ⤓ Export {isFiltered ? "Filtered" : "All"} as Excel
                 </button>
               </div>
 
