@@ -18,7 +18,6 @@
     input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     input[type="number"] { -moz-appearance: textfield; }
     @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-    @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #1a1e2a; }
     ::-webkit-scrollbar-thumb { background: #353b50; border-radius: 3px; }
@@ -28,26 +27,36 @@
 <body>
   <div id="root"></div>
 
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <!-- React + Babel + SheetJS -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+  <script>
+    // ─── Firebase Init ───
+    firebase.initializeApp({
+      apiKey: "AIzaSyBK_OqBbOQGhlPM9MaE4tFIaTBYpmn3Olg",
+      authDomain: "picker-tracker-3c8ea.firebaseapp.com",
+      projectId: "picker-tracker-3c8ea",
+      storageBucket: "picker-tracker-3c8ea.firebasestorage.app",
+      messagingSenderId: "698227230275",
+      appId: "1:698227230275:web:025cd2853c5038f11fb6f6"
+    });
+    var auth = firebase.auth();
+    var db = firebase.firestore();
+    db.enablePersistence({ synchronizeTabs: true }).catch(function(err) {
+      console.log("Persistence:", err.code);
+    });
+  </script>
+
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
-
-    // ─── Storage via localStorage ───
-    const DB = {
-      get(key, fallback) {
-        try {
-          const v = localStorage.getItem("picker_" + key);
-          return v ? JSON.parse(v) : fallback;
-        } catch { return fallback; }
-      },
-      set(key, data) {
-        try { localStorage.setItem("picker_" + key, JSON.stringify(data)); } catch (e) { console.error("Storage error:", e); }
-      }
-    };
 
     const today = () => new Date().toISOString().split("T")[0];
     const formatDate = (d) => {
@@ -55,6 +64,7 @@
       return dt.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
     };
     const genId = () => Math.random().toString(36).substr(2, 8);
+    const WASTAGE_RATE = 0.10;
 
     const C = {
       bg: "#1a1e2a", surface: "#232838", surfaceAlt: "#2a3045",
@@ -63,20 +73,34 @@
       green: "#4caf82", red: "#e05555", redDim: "#b84444",
       text: "#e8ecf4", textDim: "#8892a8", textMuted: "#5d6580", white: "#fff",
     };
-
     const baseBtn = {
-      border: "none", borderRadius: 10,
-      fontFamily: "'JetBrains Mono', monospace",
+      border: "none", borderRadius: 10, fontFamily: "'JetBrains Mono', monospace",
       fontWeight: 700, cursor: "pointer", transition: "all 0.15s ease", letterSpacing: "0.02em",
     };
     const inputBase = {
       padding: "12px 14px", borderRadius: 8, border: `1px solid ${C.border}`,
-      background: C.surface, color: C.text,
-      fontFamily: "'JetBrains Mono', monospace", fontSize: 14, outline: "none",
+      background: C.surface, color: C.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 14, outline: "none",
     };
 
+    // ─── Firestore helpers ───
+    const FB = {
+      savePickers: (list) => db.collection("appData").doc("pickers").set({ list }),
+      saveCurrentDay: (data) => data ? db.collection("appData").doc("currentDay").set(data) : db.collection("appData").doc("currentDay").delete(),
+      addHistory: (dayData) => db.collection("history").doc(dayData.date).set(dayData),
+      onPickers: (cb) => db.collection("appData").doc("pickers").onSnapshot((doc) => cb(doc.exists ? doc.data().list || [] : [])),
+      onCurrentDay: (cb) => db.collection("appData").doc("currentDay").onSnapshot((doc) => cb(doc.exists ? doc.data() : null)),
+      onHistory: (cb) => db.collection("history").orderBy("date", "desc").onSnapshot((snap) => cb(snap.docs.map((d) => d.data()))),
+    };
+
+    const pickerTotal = (entries, pid) => (entries[pid] || []).reduce((s, b) => s + b.weight, 0);
+    const dayTotal = (day) => day.activePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
+
+    // ═══════════════════════════════════
+    //  MAIN APP
+    // ═══════════════════════════════════
     function App() {
-      const [screen, setScreen] = useState("loading");
+      const [user, setUser] = useState(undefined);
+      const [screen, setScreen] = useState("setup");
       const [pickers, setPickers] = useState([]);
       const [history, setHistory] = useState([]);
       const [currentDay, setCurrentDay] = useState(null);
@@ -88,6 +112,11 @@
       const [expandedDay, setExpandedDay] = useState(null);
       const [newName, setNewName] = useState("");
       const [newId, setNewId] = useState("");
+      const [online, setOnline] = useState(navigator.onLine);
+      const [loginEmail, setLoginEmail] = useState("");
+      const [loginPass, setLoginPass] = useState("");
+      const [loginError, setLoginError] = useState("");
+      const [loginLoading, setLoginLoading] = useState(false);
       const inputRefs = useRef({});
 
       const notify = useCallback((msg, type = "info") => {
@@ -95,43 +124,60 @@
         setTimeout(() => setNotification(null), 2500);
       }, []);
 
-      // ─── Init ───
+      // ─── Auth ───
       useEffect(() => {
-        const p = DB.get("pickers", []);
-        const h = DB.get("history", []);
-        const cd = DB.get("currentDay", null);
-        setPickers(p);
-        setHistory(h);
-        if (cd && cd.date === today()) {
-          setCurrentDay(cd);
-          setScreen("tracking");
-        } else if (cd && cd.date !== today()) {
-          const nh = [cd, ...h];
-          DB.set("history", nh);
-          DB.set("currentDay", null);
-          setHistory(nh);
-          setScreen("setup");
-        } else {
-          setScreen("setup");
-        }
+        const unsub = auth.onAuthStateChanged((u) => setUser(u));
+        return unsub;
       }, []);
 
-      const savePickers = (p) => { setPickers(p); DB.set("pickers", p); };
-      const saveCurrentDay = (cd) => { setCurrentDay(cd); DB.set("currentDay", cd); };
-      const saveHistory = (h) => { setHistory(h); DB.set("history", h); };
+      const handleLogin = async () => {
+        if (!loginEmail || !loginPass) return setLoginError("Enter email and password");
+        setLoginLoading(true); setLoginError("");
+        try {
+          await auth.signInWithEmailAndPassword(loginEmail, loginPass);
+        } catch (e) {
+          const msg = e.code === "auth/wrong-password" || e.code === "auth/invalid-credential" ? "Incorrect email or password"
+            : e.code === "auth/user-not-found" ? "No account with that email"
+            : e.code === "auth/too-many-requests" ? "Too many attempts — try later" : "Login failed";
+          setLoginError(msg);
+          setLoginLoading(false);
+        }
+      };
 
-      // ─── Picker CRUD ───
-      const addPicker = () => {
+      // ─── Real-time listeners ───
+      useEffect(() => {
+        if (!user) return;
+        const unsubs = [
+          FB.onPickers((p) => setPickers(p)),
+          FB.onCurrentDay((cd) => {
+            if (cd && cd.date !== today()) {
+              FB.addHistory(cd).then(() => FB.saveCurrentDay(null));
+              return;
+            }
+            setCurrentDay(cd);
+            if (cd && cd.date === today()) setScreen((prev) => prev === "setup" ? "tracking" : prev);
+            if (!cd) setScreen((prev) => prev === "tracking" ? "setup" : prev);
+          }),
+          FB.onHistory((h) => setHistory(h)),
+        ];
+        const ho = () => setOnline(true);
+        const hf = () => setOnline(false);
+        window.addEventListener("online", ho);
+        window.addEventListener("offline", hf);
+        return () => { unsubs.forEach((u) => u()); window.removeEventListener("online", ho); window.removeEventListener("offline", hf); };
+      }, [user]);
+
+      // ─── Actions ───
+      const addPicker = async () => {
         if (!newName.trim()) return notify("Name required", "error");
         if (pickers.find((p) => p.idCode === newId.trim() && newId.trim())) return notify("ID already exists", "error");
-        savePickers([...pickers, { id: genId(), name: newName.trim(), idCode: newId.trim() || `P${pickers.length + 1}` }]);
+        await FB.savePickers([...pickers, { id: genId(), name: newName.trim(), idCode: newId.trim() || `P${pickers.length + 1}` }]);
         setNewName(""); setNewId("");
         notify("Picker added", "success");
       };
-      const removePicker = (id) => { savePickers(pickers.filter((p) => p.id !== id)); notify("Picker removed"); };
+      const removePicker = async (id) => { await FB.savePickers(pickers.filter((p) => p.id !== id)); notify("Picker removed"); };
 
-      // ─── Day ───
-      const startDay = () => {
+      const startDay = async () => {
         if (selectedPickers.length === 0) return notify("Select at least one picker", "error");
         const s = { date: today(), activePickers: selectedPickers, entries: {}, pickerNames: {} };
         selectedPickers.forEach((pid) => {
@@ -139,32 +185,31 @@
           const pk = pickers.find((p) => p.id === pid);
           s.pickerNames[pid] = pk ? `${pk.name} (${pk.idCode})` : pid;
         });
-        saveCurrentDay(s);
+        await FB.saveCurrentDay(s);
         setScreen("tracking");
         notify("Day started — good picking!", "success");
       };
 
-      const addBucket = (pickerId) => {
+      const addBucket = async (pickerId) => {
         const w = parseFloat(weightInput[pickerId]);
         if (!w || w <= 0 || w > 200) return notify("Enter valid weight (0-200 kg)", "error");
-        const u = { ...currentDay };
+        const u = { ...currentDay, entries: { ...currentDay.entries } };
         u.entries[pickerId] = [...(u.entries[pickerId] || []), { weight: w, time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }];
-        saveCurrentDay(u);
+        await FB.saveCurrentDay(u);
         setWeightInput((prev) => ({ ...prev, [pickerId]: "" }));
         setTimeout(() => inputRefs.current[pickerId]?.focus(), 50);
       };
 
-      const removeBucket = (pickerId, idx) => {
-        const u = { ...currentDay };
+      const removeBucket = async (pickerId, idx) => {
+        const u = { ...currentDay, entries: { ...currentDay.entries } };
         u.entries[pickerId] = u.entries[pickerId].filter((_, i) => i !== idx);
-        saveCurrentDay(u);
+        await FB.saveCurrentDay(u);
       };
 
-      const endDay = () => {
+      const endDay = async () => {
         if (!currentDay) return;
-        saveHistory([currentDay, ...history]);
-        saveCurrentDay(null);
-        setCurrentDay(null);
+        await FB.addHistory(currentDay);
+        await FB.saveCurrentDay(null);
         setSelectedPickers([]);
         setScreen("setup");
         notify("Day saved to history", "success");
@@ -177,259 +222,171 @@
         const pickerFilter = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
         const wb = XLSX.utils.book_new();
 
-        // ── Helper: build a day table starting at a given row ──
         const buildDayTable = (ws, day, startRow) => {
-          const vp = pickerFilter
-            ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter))
-            : day.activePickers;
+          const vp = pickerFilter ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter)) : day.activePickers;
           if (vp.length === 0) return startRow;
-
           const maxBuckets = Math.max(1, ...vp.map((pid) => (day.entries[pid] || []).length));
-
-          // Date header row
           const dateCell = XLSX.utils.encode_cell({ r: startRow, c: 0 });
           ws[dateCell] = { v: formatDate(day.date), s: { font: { bold: true, sz: 13 } } };
           if (!ws["!merges"]) ws["!merges"] = [];
           ws["!merges"].push({ s: { r: startRow, c: 0 }, e: { r: startRow, c: vp.length } });
           startRow++;
-
-          // Column headers: # | Picker1 | Picker2 | ... | Day Total
           const hdrStyle = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
           ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "#", s: hdrStyle };
-          vp.forEach((pid, ci) => {
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: day.pickerNames[pid] || pid, s: hdrStyle };
-          });
-          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: "Row Total", s: hdrStyle };
+          vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: day.pickerNames[pid] || pid, s: hdrStyle }; });
+          ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: "Day Total", s: hdrStyle };
           startRow++;
-
-          // Bucket rows
           const dataStyle = { alignment: { horizontal: "center" } };
           const altStyle = { alignment: { horizontal: "center" }, fill: { fgColor: { rgb: "F2F2F2" } } };
           for (let i = 0; i < maxBuckets; i++) {
-            const rowStyle = i % 2 === 0 ? dataStyle : altStyle;
-            ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: i + 1, s: rowStyle };
+            const rs = i % 2 === 0 ? dataStyle : altStyle;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: i + 1, s: rs };
             let rowSum = 0;
-            vp.forEach((pid, ci) => {
-              const bk = (day.entries[pid] || [])[i];
-              const val = bk ? bk.weight : "";
-              ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: val, s: rowStyle };
-              if (bk) rowSum += bk.weight;
-            });
-            ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: rowSum || "", s: rowStyle };
+            vp.forEach((pid, ci) => { const bk = (day.entries[pid] || [])[i]; ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: bk ? bk.weight : "", s: rs }; if (bk) rowSum += bk.weight; });
+            ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: rowSum || "", s: rs };
             startRow++;
           }
-
-          // Bucket count row
           const countStyle = { font: { italic: true, color: { rgb: "888888" } }, alignment: { horizontal: "center" } };
           ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "Buckets", s: { font: { bold: true, italic: true, color: { rgb: "888888" } } } };
-          vp.forEach((pid, ci) => {
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: (day.entries[pid] || []).length, s: countStyle };
-          });
+          vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: (day.entries[pid] || []).length, s: countStyle }; });
           startRow++;
-
-          // Gross row
           const grossStyle = { font: { bold: true, sz: 12, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "E8A838" } }, alignment: { horizontal: "center" } };
           ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "GROSS", s: grossStyle };
           let grandGross = 0;
-          vp.forEach((pid, ci) => {
-            const t = pickerTotal(day.entries, pid);
-            grandGross += t;
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(t.toFixed(1)), s: grossStyle };
-          });
+          vp.forEach((pid, ci) => { const t = pickerTotal(day.entries, pid); grandGross += t; ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(t.toFixed(1)), s: grossStyle }; });
           ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat(grandGross.toFixed(1)), s: grossStyle };
           startRow++;
-
-          // Wastage row
           const wastageStyle = { font: { bold: true, color: { rgb: "E05555" } }, alignment: { horizontal: "center" } };
           ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "WASTAGE (10%)", s: wastageStyle };
-          vp.forEach((pid, ci) => {
-            const w = pickerTotal(day.entries, pid) * WASTAGE_RATE;
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((-w).toFixed(1)), s: wastageStyle };
-          });
+          vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((-pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)), s: wastageStyle }; });
           ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((-grandGross * WASTAGE_RATE).toFixed(1)), s: wastageStyle };
           startRow++;
-
-          // Nett row
           const nettStyle = { font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } };
           ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "NETT", s: nettStyle };
-          vp.forEach((pid, ci) => {
-            const n = pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE);
-            ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(n.toFixed(1)), s: nettStyle };
-          });
+          vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)), s: nettStyle }; });
           ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((grandGross * (1 - WASTAGE_RATE)).toFixed(1)), s: nettStyle };
           startRow++;
-
-          // Update sheet range
           const maxCol = vp.length + 1;
           const curRef = ws["!ref"];
           const newRef = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: startRow - 1, c: maxCol } });
           ws["!ref"] = curRef ? (XLSX.utils.decode_range(curRef).e.r < startRow - 1 || XLSX.utils.decode_range(curRef).e.c < maxCol ? newRef : curRef) : newRef;
-
-          return startRow + 1; // gap between tables
+          return startRow + 1;
         };
 
-        // ── Group days by week and month ──
-        const groupByWeek = (days) => {
-          const weeks = {};
-          days.forEach((day) => {
-            const d = new Date(day.date + "T12:00:00");
-            const jan1 = new Date(d.getFullYear(), 0, 1);
-            const weekNum = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
-            const key = `Week ${weekNum} (${d.getFullYear()})`;
-            if (!weeks[key]) weeks[key] = [];
-            weeks[key].push(day);
-          });
-          return weeks;
-        };
+        const groupByWeek = (days) => { const w = {}; days.forEach((d) => { const dt = new Date(d.date + "T12:00:00"); const j = new Date(dt.getFullYear(), 0, 1); const wn = Math.ceil(((dt - j) / 86400000 + j.getDay() + 1) / 7); const k = `Week ${wn} (${dt.getFullYear()})`; if (!w[k]) w[k] = []; w[k].push(d); }); return w; };
+        const groupByMonth = (days) => { const m = {}; days.forEach((d) => { const dt = new Date(d.date + "T12:00:00"); const k = dt.toLocaleDateString("en-GB", { month: "long", year: "numeric" }); if (!m[k]) m[k] = []; m[k].push(d); }); return m; };
 
-        const groupByMonth = (days) => {
-          const months = {};
-          days.forEach((day) => {
-            const d = new Date(day.date + "T12:00:00");
-            const key = d.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-            if (!months[key]) months[key] = [];
-            months[key].push(day);
-          });
-          return months;
-        };
-
-        // ── Sheet 1: Daily View (each day as its own table) ──
-        const wsDays = {};
-        let row = 0;
-        // Title
-        wsDays[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Daily Picking Records", s: { font: { bold: true, sz: 16 } } };
-        wsDays["!ref"] = "A1";
-        row += 2;
+        // Daily sheet
+        const wsDays = {}; let row = 0;
+        wsDays[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Daily Picking Records", s: { font: { bold: true, sz: 16 } } }; wsDays["!ref"] = "A1"; row = 2;
         data.forEach((day) => { row = buildDayTable(wsDays, day, row); });
-        // Set column widths
-        wsDays["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
+        wsDays["!cols"] = [{ wch: 14 }, ...Array(20).fill({ wch: 18 })];
         XLSX.utils.book_append_sheet(wb, wsDays, "Daily");
 
-        // ── Sheet 2: Weekly Summary ──
-        const weeks = groupByWeek(data);
-        const wsWeeks = {};
-        row = 0;
-        wsWeeks[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Weekly Summary", s: { font: { bold: true, sz: 16 } } };
-        wsWeeks["!ref"] = "A1";
-        row += 2;
-        Object.entries(weeks).forEach(([weekLabel, days]) => {
-          wsWeeks[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: weekLabel, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } };
-          wsWeeks["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } });
-          row += 1;
-          days.forEach((day) => { row = buildDayTable(wsWeeks, day, row); });
-          row += 1; // extra gap between weeks
-        });
-        wsWeeks["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
-        XLSX.utils.book_append_sheet(wb, wsWeeks, "Weekly");
+        // Weekly sheet
+        const weeks = groupByWeek(data); const wsW = {}; row = 0;
+        wsW[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Weekly Summary", s: { font: { bold: true, sz: 16 } } }; wsW["!ref"] = "A1"; row = 2;
+        Object.entries(weeks).forEach(([wl, days]) => { wsW[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: wl, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } }; wsW["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } }); row++; days.forEach((d) => { row = buildDayTable(wsW, d, row); }); row++; });
+        wsW["!cols"] = [{ wch: 14 }, ...Array(20).fill({ wch: 18 })];
+        XLSX.utils.book_append_sheet(wb, wsW, "Weekly");
 
-        // ── Sheet 3: Monthly Summary ──
-        const months = groupByMonth(data);
-        const wsMonths = {};
-        row = 0;
-        wsMonths[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Monthly Summary", s: { font: { bold: true, sz: 16 } } };
-        wsMonths["!ref"] = "A1";
-        row += 2;
-        Object.entries(months).forEach(([monthLabel, days]) => {
-          wsMonths[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: monthLabel, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } };
-          wsMonths["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } });
-          row += 1;
-          days.forEach((day) => { row = buildDayTable(wsMonths, day, row); });
-          row += 1;
-        });
-        wsMonths["!cols"] = [{ wch: 10 }, ...Array(20).fill({ wch: 18 })];
-        XLSX.utils.book_append_sheet(wb, wsMonths, "Monthly");
+        // Monthly sheet
+        const months = groupByMonth(data); const wsM = {}; row = 0;
+        wsM[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Monthly Summary", s: { font: { bold: true, sz: 16 } } }; wsM["!ref"] = "A1"; row = 2;
+        Object.entries(months).forEach(([ml, days]) => { wsM[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: ml, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } }; wsM["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 20 } }); row++; days.forEach((d) => { row = buildDayTable(wsM, d, row); }); row++; });
+        wsM["!cols"] = [{ wch: 14 }, ...Array(20).fill({ wch: 18 })];
+        XLSX.utils.book_append_sheet(wb, wsM, "Monthly");
 
-        // ── Sheet 4: Picker Totals (summary per picker across all days) ──
-        const wsSummary = {};
-        const allPids = new Map();
-        data.forEach((day) => {
-          const vp = pickerFilter
-            ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter))
-            : day.activePickers;
-          vp.forEach((pid) => {
-            if (!allPids.has(pid)) allPids.set(pid, { name: day.pickerNames[pid] || pid, totalKg: 0, totalBuckets: 0, days: 0 });
-            const info = allPids.get(pid);
-            info.totalKg += pickerTotal(day.entries, pid);
-            info.totalBuckets += (day.entries[pid] || []).length;
-            info.days++;
-          });
-        });
-
-        row = 0;
-        wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: "Picker Summary", s: { font: { bold: true, sz: 16 } } };
-        row += 2;
-        const sumHdr = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
-        ["Picker", "Days Worked", "Total Buckets", "Gross kg", "Wastage kg", "Nett kg", "Avg Nett/Day", "Avg Nett/Bucket"].forEach((h, ci) => {
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: ci })] = { v: h, s: sumHdr };
-        });
-        row++;
-
+        // Picker Summary sheet
+        const wsS = {}; const allP = new Map(); row = 0;
+        data.forEach((day) => { const vp = pickerFilter ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter)) : day.activePickers; vp.forEach((pid) => { if (!allP.has(pid)) allP.set(pid, { name: day.pickerNames[pid] || pid, totalKg: 0, totalBuckets: 0, days: 0 }); const info = allP.get(pid); info.totalKg += pickerTotal(day.entries, pid); info.totalBuckets += (day.entries[pid] || []).length; info.days++; }); });
+        wsS[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Picker Summary", s: { font: { bold: true, sz: 16 } } }; row = 2;
+        const sh = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
+        ["Picker", "Days Worked", "Total Buckets", "Gross kg", "Wastage kg", "Nett kg", "Avg Nett/Day", "Avg Nett/Bucket"].forEach((h, ci) => { wsS[XLSX.utils.encode_cell({ r: row, c: ci })] = { v: h, s: sh }; }); row++;
         const ctr = { alignment: { horizontal: "center" } };
-        allPids.forEach((info) => {
-          const wastage = info.totalKg * WASTAGE_RATE;
-          const nett = info.totalKg * (1 - WASTAGE_RATE);
-          const avgDay = info.days > 0 ? (nett / info.days).toFixed(1) : "0";
-          const avgBucket = info.totalBuckets > 0 ? (nett / info.totalBuckets).toFixed(1) : "0";
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: info.name };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: info.days, s: ctr };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 2 })] = { v: info.totalBuckets, s: ctr };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 3 })] = { v: parseFloat(info.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 4 })] = { v: parseFloat((-wastage).toFixed(1)), s: { font: { color: { rgb: "E05555" } }, alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 5 })] = { v: parseFloat(nett.toFixed(1)), s: { font: { bold: true, color: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 6 })] = { v: parseFloat(avgDay), s: ctr };
-          wsSummary[XLSX.utils.encode_cell({ r: row, c: 7 })] = { v: parseFloat(avgBucket), s: ctr };
-          row++;
-        });
+        allP.forEach((info) => { const w = info.totalKg * WASTAGE_RATE; const n = info.totalKg * (1 - WASTAGE_RATE); wsS[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: info.name }; wsS[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: info.days, s: ctr }; wsS[XLSX.utils.encode_cell({ r: row, c: 2 })] = { v: info.totalBuckets, s: ctr }; wsS[XLSX.utils.encode_cell({ r: row, c: 3 })] = { v: parseFloat(info.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r: row, c: 4 })] = { v: parseFloat((-w).toFixed(1)), s: { font: { color: { rgb: "E05555" } }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r: row, c: 5 })] = { v: parseFloat(n.toFixed(1)), s: { font: { bold: true, color: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r: row, c: 6 })] = { v: info.days > 0 ? parseFloat((n / info.days).toFixed(1)) : 0, s: ctr }; wsS[XLSX.utils.encode_cell({ r: row, c: 7 })] = { v: info.totalBuckets > 0 ? parseFloat((n / info.totalBuckets).toFixed(1)) : 0, s: ctr }; row++; });
+        wsS["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row - 1, c: 7 } });
+        wsS["!cols"] = [{ wch: 25 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
+        XLSX.utils.book_append_sheet(wb, wsS, "Picker Summary");
 
-        wsSummary["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row - 1, c: 7 } });
-        wsSummary["!cols"] = [{ wch: 25 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
-        XLSX.utils.book_append_sheet(wb, wsSummary, "Picker Summary");
-
-        // ── Download ──
         XLSX.writeFile(wb, `picking-records-${today()}.xlsx`);
         notify("Excel saved to Downloads", "success");
       };
 
+      // ─── Filters ───
       const getFiltered = () => history.filter((day) => {
         if (historyFilter.dateFrom && day.date < historyFilter.dateFrom) return false;
         if (historyFilter.dateTo && day.date > historyFilter.dateTo) return false;
-        if (historyFilter.picker) {
-          const t = historyFilter.picker.toLowerCase();
-          return day.activePickers.some((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(t));
-        }
+        if (historyFilter.picker) { const t = historyFilter.picker.toLowerCase(); return day.activePickers.some((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(t)); }
         return true;
       });
-
-      const pickerTotal = (entries, pid) => (entries[pid] || []).reduce((s, b) => s + b.weight, 0);
-      const dayTotal = (day) => day.activePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
-      const WASTAGE_RATE = 0.10;
-
       const isFiltered = historyFilter.picker || historyFilter.dateFrom || historyFilter.dateTo;
       const filtered = getFiltered();
 
-      // ─── Loading ───
-      if (screen === "loading") return (
+      // ═══════════════════════════════════
+      //  LOGIN SCREEN
+      // ═══════════════════════════════════
+      if (user === undefined) return (
         <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg }}>
-          <span style={{ color: C.accent, fontSize: 22, fontWeight: 800 }}>Loading...</span>
+          <span style={{ color: C.accent, fontSize: 20, fontWeight: 800 }}>Loading...</span>
         </div>
       );
 
+      if (!user) return (
+        <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, padding: 20 }}>
+          <div style={{ width: "100%", maxWidth: 380, background: C.surface, borderRadius: 16, padding: 32, border: `1px solid ${C.border}` }}>
+            <div style={{ textAlign: "center", marginBottom: 28 }}>
+              <div style={{ fontSize: 40, marginBottom: 8 }}>⚖</div>
+              <h1 style={{ color: C.accent, fontSize: 24, fontWeight: 800, margin: 0 }}>PICKER TRACKER</h1>
+              <p style={{ color: C.textMuted, fontSize: 12, marginTop: 6 }}>Sign in to continue</p>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 4, fontWeight: 600 }}>Email</label>
+                <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleLogin()} placeholder="email@example.com"
+                  style={{ ...inputBase, width: "100%" }} />
+              </div>
+              <div>
+                <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 4, fontWeight: 600 }}>Password</label>
+                <input type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleLogin()} placeholder="••••••••"
+                  style={{ ...inputBase, width: "100%" }} />
+              </div>
+              {loginError && <p style={{ color: C.red, fontSize: 12, margin: 0 }}>{loginError}</p>}
+              <button onClick={handleLogin} disabled={loginLoading}
+                style={{ ...baseBtn, width: "100%", padding: 14, fontSize: 16, background: loginLoading ? C.surfaceAlt : C.green, color: loginLoading ? C.textMuted : C.white, marginTop: 4 }}>
+                {loginLoading ? "Signing in..." : "Sign In"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ═══════════════════════════════════
+      //  MAIN APP (logged in)
+      // ═══════════════════════════════════
       return (
         <div style={{ minHeight: "100vh", background: C.bg }}>
 
           {/* ─── NAV ─── */}
           <div style={{ display: "flex", gap: 4, padding: "10px 12px", background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 150 }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 120 }}>
               <span style={{ fontSize: 20, fontWeight: 800, color: C.accent, letterSpacing: "-0.03em" }}>⚖ PICKER</span>
               <span style={{ fontSize: 10, color: C.textMuted, background: C.surfaceAlt, padding: "2px 7px", borderRadius: 5 }}>{today()}</span>
+              {!online && <span style={{ fontSize: 9, color: C.red, background: "rgba(224,85,85,0.15)", padding: "2px 7px", borderRadius: 5, fontWeight: 700 }}>OFFLINE</span>}
             </div>
-            <div style={{ display: "flex", gap: 4 }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
               {[["setup", "☰ Setup"], ["tracking", "✎ Track"], ["history", "◷ History"], ["manage", "⚙ Pickers"]].map(([s, l]) => (
                 <button key={s} onClick={() => setScreen(s)} disabled={s === "tracking" && !currentDay}
                   style={{ ...baseBtn, padding: "8px 12px", fontSize: 12, background: screen === s ? C.accent : "transparent", color: screen === s ? C.bg : C.textDim, opacity: s === "tracking" && !currentDay ? 0.3 : 1 }}>
                   {l}
                 </button>
               ))}
+              <button onClick={() => auth.signOut()}
+                style={{ ...baseBtn, padding: "8px 10px", fontSize: 11, background: "transparent", color: C.textMuted, marginLeft: 4 }}>
+                ↪ Out
+              </button>
             </div>
           </div>
 
@@ -536,8 +493,7 @@
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                                     <span style={{ fontWeight: 700 }}>{bk.weight} kg</span>
                                     <span style={{ fontSize: 9, color: C.textMuted }}>{bk.time}</span>
-                                    <button onClick={() => removeBucket(pid, i)}
-                                      style={{ background: "none", border: "none", color: C.redDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✕</button>
+                                    <button onClick={() => removeBucket(pid, i)} style={{ background: "none", border: "none", color: C.redDim, cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✕</button>
                                   </div>
                                 ) : <span style={{ color: C.textMuted }}>—</span>}
                               </td>
@@ -545,90 +501,62 @@
                           })}
                         </tr>
                       ))}
-
+                      {/* INPUT ROW */}
                       <tr style={{ background: C.accentGlow }}>
                         <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 700, fontSize: 11 }}>ADD</td>
                         {ap.map((pid) => (
                           <td key={pid} style={{ padding: "6px 8px", textAlign: "center" }}>
                             <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                              <input ref={(el) => (inputRefs.current[pid] = el)}
-                                type="number" inputMode="decimal" step="0.1" placeholder="kg"
+                              <input ref={(el) => (inputRefs.current[pid] = el)} type="number" inputMode="decimal" step="0.1" placeholder="kg"
                                 value={weightInput[pid] || ""}
                                 onChange={(e) => setWeightInput((prev) => ({ ...prev, [pid]: e.target.value }))}
                                 onKeyDown={(e) => e.key === "Enter" && addBucket(pid)}
                                 style={{ width: 70, padding: "10px 6px", borderRadius: 8, border: `2px solid ${C.accent}`, background: C.surface, color: C.text, fontSize: 16, fontWeight: 700, textAlign: "center", outline: "none", fontFamily: "'JetBrains Mono', monospace" }} />
-                              <button onClick={() => addBucket(pid)}
-                                style={{ ...baseBtn, padding: "10px 14px", background: C.green, color: C.white, fontSize: 18, minWidth: 44 }}>+</button>
+                              <button onClick={() => addBucket(pid)} style={{ ...baseBtn, padding: "10px 14px", background: C.green, color: C.white, fontSize: 18, minWidth: 44 }}>+</button>
                             </div>
                           </td>
                         ))}
                       </tr>
-
-                      {/* ── GROSS ROW ── */}
+                      {/* GROSS */}
                       <tr style={{ background: C.surfaceAlt }}>
                         <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 11 }}>GROSS</td>
-                        {ap.map((pid) => {
-                          const t = pickerTotal(entries, pid);
-                          const c = (entries[pid] || []).length;
-                          return (
-                            <td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}` }}>
-                              <div style={{ color: C.accent, fontWeight: 800, fontSize: 16 }}>{t.toFixed(1)} kg</div>
-                              <div style={{ color: C.textMuted, fontSize: 10 }}>{c} bucket{c !== 1 ? "s" : ""}</div>
-                            </td>
-                          );
-                        })}
+                        {ap.map((pid) => { const t = pickerTotal(entries, pid); const c = (entries[pid] || []).length; return (
+                          <td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}` }}>
+                            <div style={{ color: C.accent, fontWeight: 800, fontSize: 16 }}>{t.toFixed(1)} kg</div>
+                            <div style={{ color: C.textMuted, fontSize: 10 }}>{c} bucket{c !== 1 ? "s" : ""}</div>
+                          </td>); })}
                       </tr>
-                      {/* ── WASTAGE ROW ── */}
+                      {/* WASTAGE */}
                       <tr style={{ background: C.surface }}>
                         <td style={{ padding: "8px 12px", color: C.red, fontWeight: 700, fontSize: 11 }}>WASTAGE</td>
-                        {ap.map((pid) => {
-                          const w = pickerTotal(entries, pid) * WASTAGE_RATE;
-                          return (
-                            <td key={pid} style={{ padding: "8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 14 }}>
-                              -{w.toFixed(1)} kg
-                            </td>
-                          );
-                        })}
+                        {ap.map((pid) => (<td key={pid} style={{ padding: "8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 14 }}>-{(pickerTotal(entries, pid) * WASTAGE_RATE).toFixed(1)} kg</td>))}
                       </tr>
-                      {/* ── NETT ROW ── */}
+                      {/* NETT */}
                       <tr style={{ background: C.surfaceAlt }}>
                         <td style={{ padding: "10px 12px", color: C.green, fontWeight: 800, fontSize: 11 }}>NETT</td>
-                        {ap.map((pid) => {
-                          const t = pickerTotal(entries, pid);
-                          const n = t * (1 - WASTAGE_RATE);
-                          return (
-                            <td key={pid} style={{ padding: "10px 8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 18 }}>
-                              {n.toFixed(1)} kg
-                            </td>
-                          );
-                        })}
+                        {ap.map((pid) => (<td key={pid} style={{ padding: "10px 8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 18 }}>{(pickerTotal(entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)} kg</td>))}
                       </tr>
                     </tbody>
                   </table>
                 </div>
 
-                {/* ── GRAND TOTALS ── */}
-                {(() => {
-                  const grossTotal = ap.reduce((s, pid) => s + pickerTotal(entries, pid), 0);
-                  const wastageTotal = grossTotal * WASTAGE_RATE;
-                  const nettTotal = grossTotal * (1 - WASTAGE_RATE);
-                  return (
-                    <div style={{ marginTop: 16, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <span style={{ color: C.accent, fontWeight: 700, fontSize: 13 }}>GRAND GROSS</span>
-                        <span style={{ color: C.accent, fontWeight: 800, fontSize: 20 }}>{grossTotal.toFixed(1)} kg</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE * 100).toFixed(0)}%)</span>
-                        <span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{wastageTotal.toFixed(1)} kg</span>
-                      </div>
-                      <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>GRAND NETT</span>
-                        <span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{nettTotal.toFixed(1)} kg</span>
-                      </div>
+                {/* GRAND TOTALS */}
+                {(() => { const g = ap.reduce((s, pid) => s + pickerTotal(entries, pid), 0); return (
+                  <div style={{ marginTop: 16, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ color: C.accent, fontWeight: 700, fontSize: 13 }}>GRAND GROSS</span>
+                      <span style={{ color: C.accent, fontWeight: 800, fontSize: 20 }}>{g.toFixed(1)} kg</span>
                     </div>
-                  );
-                })()}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE*100).toFixed(0)}%)</span>
+                      <span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{(g * WASTAGE_RATE).toFixed(1)} kg</span>
+                    </div>
+                    <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>GRAND NETT</span>
+                      <span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{(g * (1 - WASTAGE_RATE)).toFixed(1)} kg</span>
+                    </div>
+                  </div>
+                ); })()}
               </div>
             );
           })()}
@@ -639,47 +567,30 @@
           {screen === "history" && (
             <div style={{ padding: 20, maxWidth: 800, margin: "0 auto" }}>
               <h2 style={{ color: C.accent, fontSize: 20, marginBottom: 16 }}>History</h2>
-
               <div style={{ background: C.surfaceAlt, borderRadius: 12, padding: 16, marginBottom: 20, border: `1px solid ${C.border}` }}>
                 <div style={{ color: C.textDim, fontSize: 12, fontWeight: 700, marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Search & Filter Records</div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <div style={{ flex: 2, minWidth: 160 }}>
                     <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 4, fontWeight: 600 }}>Picker Name</label>
-                    <input placeholder="e.g. John" value={historyFilter.picker}
-                      onChange={(e) => setHistoryFilter((f) => ({ ...f, picker: e.target.value }))}
-                      style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 14px" }} />
+                    <input placeholder="e.g. John" value={historyFilter.picker} onChange={(e) => setHistoryFilter((f) => ({ ...f, picker: e.target.value }))} style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 14px" }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 130 }}>
                     <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 4, fontWeight: 600 }}>From Date</label>
-                    <input type="date" value={historyFilter.dateFrom}
-                      onChange={(e) => setHistoryFilter((f) => ({ ...f, dateFrom: e.target.value }))}
-                      style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 12px" }} />
+                    <input type="date" value={historyFilter.dateFrom} onChange={(e) => setHistoryFilter((f) => ({ ...f, dateFrom: e.target.value }))} style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 12px" }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 130 }}>
                     <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 4, fontWeight: 600 }}>To Date</label>
-                    <input type="date" value={historyFilter.dateTo}
-                      onChange={(e) => setHistoryFilter((f) => ({ ...f, dateTo: e.target.value }))}
-                      style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 12px" }} />
+                    <input type="date" value={historyFilter.dateTo} onChange={(e) => setHistoryFilter((f) => ({ ...f, dateTo: e.target.value }))} style={{ ...inputBase, width: "100%", fontSize: 13, padding: "10px 12px" }} />
                   </div>
-                  {isFiltered && (
-                    <button onClick={() => setHistoryFilter({ picker: "", dateFrom: "", dateTo: "" })}
-                      style={{ ...baseBtn, padding: "10px 14px", background: C.surface, color: C.textDim, fontSize: 12, border: `1px solid ${C.border}` }}>✕ Clear</button>
-                  )}
+                  {isFiltered && <button onClick={() => setHistoryFilter({ picker: "", dateFrom: "", dateTo: "" })} style={{ ...baseBtn, padding: "10px 14px", background: C.surface, color: C.textDim, fontSize: 12, border: `1px solid ${C.border}` }}>✕ Clear</button>}
                 </div>
-                <p style={{ color: C.textMuted, fontSize: 11, marginTop: 10, lineHeight: 1.4 }}>Results update instantly as you type or select dates. Tap a day below to see the full breakdown.</p>
+                <p style={{ color: C.textMuted, fontSize: 11, marginTop: 10, lineHeight: 1.4 }}>Results update instantly. Tap a day below to see the full breakdown.</p>
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <span style={{ color: C.textDim, fontSize: 13 }}>
                   {isFiltered ? `Showing ${filtered.length} of ${history.length} day${history.length !== 1 ? "s" : ""}` : `${history.length} day${history.length !== 1 ? "s" : ""} recorded`}
-                  {filtered.length > 0 && (() => {
-                    const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
-                    const total = filtered.reduce((s, d) => {
-                      const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers;
-                      return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0);
-                    }, 0);
-                    return ` — Gross: ${total.toFixed(1)} kg / Nett: ${(total * (1 - WASTAGE_RATE)).toFixed(1)} kg`;
-                  })()}
+                  {filtered.length > 0 && (() => { const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : ""; const total = filtered.reduce((s, d) => { const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers; return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0); }, 0); return ` — Gross: ${total.toFixed(1)} kg / Nett: ${(total * (1 - WASTAGE_RATE)).toFixed(1)} kg`; })()}
                 </span>
                 <button onClick={() => exportExcel(filtered)} disabled={filtered.length === 0}
                   style={{ ...baseBtn, padding: "10px 18px", background: filtered.length > 0 ? C.green : C.surfaceAlt, color: filtered.length > 0 ? C.white : C.textMuted, fontSize: 13 }}>
@@ -689,18 +600,14 @@
 
               {filtered.length === 0 ? (
                 <div style={{ background: C.surfaceAlt, borderRadius: 12, padding: 30, textAlign: "center" }}>
-                  <p style={{ color: C.textDim, fontSize: 14 }}>
-                    {history.length === 0 ? "No records yet. Complete a day to see history here." : "No records match your filters."}
-                  </p>
+                  <p style={{ color: C.textDim, fontSize: 14 }}>{history.length === 0 ? "No records yet. Complete a day to see history here." : "No records match your filters."}</p>
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {filtered.map((day, di) => {
                     const isExp = expandedDay === di;
                     const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : "";
-                    const visiblePickers = pf
-                      ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pf))
-                      : day.activePickers;
+                    const visiblePickers = pf ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pf)) : day.activePickers;
                     const visibleTotal = visiblePickers.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
                     const visibleNett = visibleTotal * (1 - WASTAGE_RATE);
                     return (
@@ -724,54 +631,27 @@
                                 <thead>
                                   <tr>
                                     <th style={{ padding: 8, color: C.textMuted, textAlign: "left", borderBottom: `1px solid ${C.border}`, fontSize: 10 }}>#</th>
-                                    {visiblePickers.map((pid) => (
-                                      <th key={pid} style={{ padding: 8, color: C.accent, fontWeight: 700, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>
-                                        {day.pickerNames[pid] || pid}
-                                      </th>
-                                    ))}
+                                    {visiblePickers.map((pid) => (<th key={pid} style={{ padding: 8, color: C.accent, fontWeight: 700, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>{day.pickerNames[pid] || pid}</th>))}
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {Array.from({ length: Math.max(1, ...visiblePickers.map((pid) => (day.entries[pid] || []).length)) }, (_, i) => (
                                     <tr key={i} style={{ background: i % 2 === 0 ? C.surface : C.surfaceAlt }}>
                                       <td style={{ padding: "6px 8px", color: C.textMuted, borderBottom: `1px solid ${C.border}`, fontSize: 10 }}>{i + 1}</td>
-                                      {visiblePickers.map((pid) => {
-                                        const b = (day.entries[pid] || [])[i];
-                                        return (
-                                          <td key={pid} style={{ padding: "6px 8px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.text, fontSize: 12 }}>
-                                            {b ? `${b.weight} kg` : "—"}
-                                          </td>
-                                        );
-                                      })}
+                                      {visiblePickers.map((pid) => { const b = (day.entries[pid] || [])[i]; return (<td key={pid} style={{ padding: "6px 8px", textAlign: "center", borderBottom: `1px solid ${C.border}`, color: C.text, fontSize: 12 }}>{b ? `${b.weight} kg` : "—"}</td>); })}
                                     </tr>
                                   ))}
-                                  {/* ── GROSS ── */}
                                   <tr style={{ background: C.surfaceAlt }}>
                                     <td style={{ padding: "8px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 10 }}>GROSS</td>
-                                    {visiblePickers.map((pid) => (
-                                      <td key={pid} style={{ padding: "8px", textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 13 }}>
-                                        {pickerTotal(day.entries, pid).toFixed(1)} kg
-                                        <div style={{ fontSize: 9, color: C.textMuted, fontWeight: 400 }}>{(day.entries[pid] || []).length} buckets</div>
-                                      </td>
-                                    ))}
+                                    {visiblePickers.map((pid) => (<td key={pid} style={{ padding: "8px", textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 13 }}>{pickerTotal(day.entries, pid).toFixed(1)} kg<div style={{ fontSize: 9, color: C.textMuted, fontWeight: 400 }}>{(day.entries[pid] || []).length} buckets</div></td>))}
                                   </tr>
-                                  {/* ── WASTAGE ── */}
                                   <tr style={{ background: C.surface }}>
                                     <td style={{ padding: "6px 8px", color: C.red, fontWeight: 700, fontSize: 10 }}>WASTAGE</td>
-                                    {visiblePickers.map((pid) => (
-                                      <td key={pid} style={{ padding: "6px 8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 12 }}>
-                                        -{(pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)} kg
-                                      </td>
-                                    ))}
+                                    {visiblePickers.map((pid) => (<td key={pid} style={{ padding: "6px 8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 12 }}>-{(pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)} kg</td>))}
                                   </tr>
-                                  {/* ── NETT ── */}
                                   <tr style={{ background: C.surfaceAlt }}>
                                     <td style={{ padding: "8px", color: C.green, fontWeight: 800, fontSize: 10 }}>NETT</td>
-                                    {visiblePickers.map((pid) => (
-                                      <td key={pid} style={{ padding: "8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 14 }}>
-                                        {(pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)} kg
-                                      </td>
-                                    ))}
+                                    {visiblePickers.map((pid) => (<td key={pid} style={{ padding: "8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 14 }}>{(pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)} kg</td>))}
                                   </tr>
                                 </tbody>
                               </table>
@@ -794,14 +674,9 @@
               <h2 style={{ color: C.accent, fontSize: 20, marginBottom: 16 }}>Manage Pickers</h2>
               <div style={{ background: C.surfaceAlt, borderRadius: 12, padding: 18, marginBottom: 20, border: `1px solid ${C.border}` }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <input placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addPicker()}
-                    style={{ ...inputBase, flex: 2, minWidth: 140 }} />
-                  <input placeholder="ID (optional)" value={newId} onChange={(e) => setNewId(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addPicker()}
-                    style={{ ...inputBase, flex: 1, minWidth: 100 }} />
-                  <button onClick={addPicker}
-                    style={{ ...baseBtn, padding: "12px 20px", background: C.green, color: C.white, fontSize: 14 }}>+ Add</button>
+                  <input placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 2, minWidth: 140 }} />
+                  <input placeholder="ID (optional)" value={newId} onChange={(e) => setNewId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 1, minWidth: 100 }} />
+                  <button onClick={addPicker} style={{ ...baseBtn, padding: "12px 20px", background: C.green, color: C.white, fontSize: 14 }}>+ Add</button>
                 </div>
               </div>
               {pickers.length === 0 ? (
@@ -831,12 +706,9 @@
   </script>
 
   <script>
-    // Register service worker for offline support
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js")
-          .then((reg) => console.log("SW registered:", reg.scope))
-          .catch((err) => console.log("SW registration failed:", err));
+        navigator.serviceWorker.register("./sw.js").then((r) => console.log("SW:", r.scope)).catch((e) => console.log("SW fail:", e));
       });
     }
   </script>

@@ -1,9 +1,12 @@
-const CACHE_NAME = "picker-tracker-v4";
+const CACHE_NAME = "picker-tracker-v5";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
   "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap",
+  "https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js",
+  "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js",
+  "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js",
