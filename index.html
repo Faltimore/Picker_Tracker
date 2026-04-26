@@ -179,6 +179,9 @@
       const [expandedDay, setExpandedDay] = useState(null);
       const [newName, setNewName] = useState("");
       const [newId, setNewId] = useState("");
+      const [firstBin, setFirstBin] = useState("");
+      const [nextBinVal, setNextBinVal] = useState("");
+      const [showNextBin, setShowNextBin] = useState(false);
       const [online, setOnline] = useState(navigator.onLine);
       const [loginEmail, setLoginEmail] = useState("");
       const [loginPass, setLoginPass] = useState("");
@@ -257,6 +260,7 @@
 
       const startDay = async () => {
         if (selectedPickers.length === 0) return notify("Select at least one picker", "error");
+        if (!firstBin.trim()) return notify("Enter a starting bin number", "error");
         // Double-check none are taken
         const conflict = selectedPickers.find((pid) => takenPickers[pid]);
         if (conflict) return notify("A selected picker was just claimed by another contractor. Deselect them and try again.", "error");
@@ -264,6 +268,7 @@
         const s = {
           date: today(), activePickers: selectedPickers, entries: {}, pickerNames: {},
           contractorEmail: user.email, contractorName: user.email.split("@")[0],
+          currentBin: firstBin.trim().toUpperCase(), bins: [],
         };
         selectedPickers.forEach((pid) => {
           s.entries[pid] = [];
@@ -281,7 +286,7 @@
         const w = parseFloat(weightInput[pickerId]);
         if (!w || w <= 0 || w > 200) return notify("Enter valid weight (0-200 kg)", "error");
         const u = { ...mySession, entries: { ...mySession.entries } };
-        u.entries[pickerId] = [...(u.entries[pickerId] || []), { weight: w, time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }];
+        u.entries[pickerId] = [...(u.entries[pickerId] || []), { weight: w, time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }), bin: mySession.currentBin || "" }];
         await FB.saveSession(mySessionId, u);
         setWeightInput((prev) => ({ ...prev, [pickerId]: "" }));
         setTimeout(() => inputRefs.current[pickerId]?.focus(), 50);
@@ -293,13 +298,36 @@
         await FB.saveSession(mySessionId, u);
       };
 
+      const calcBinWeight = (sess, binNumber) => {
+        let w = 0, c = 0;
+        (sess.activePickers || []).forEach((pid) => { (sess.entries[pid] || []).forEach((b) => { if (b.bin === binNumber) { w += b.weight; c++; } }); });
+        return { weight: parseFloat(w.toFixed(1)), count: c };
+      };
+
+      const closeCurrentBin = async () => {
+        if (!nextBinVal.trim()) return notify("Enter next bin number", "error");
+        const cb = mySession.currentBin;
+        const { weight: bw, count: bc } = calcBinWeight(mySession, cb);
+        const closed = { number: cb, totalWeight: bw, bucketCount: bc, closedAt: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) };
+        await FB.saveSession(mySessionId, { ...mySession, currentBin: nextBinVal.trim().toUpperCase(), bins: [...(mySession.bins || []), closed] });
+        const nb = nextBinVal.trim().toUpperCase();
+        setNextBinVal(""); setShowNextBin(false);
+        notify(`Bin ${cb} closed — now filling ${nb}`, "success");
+      };
+
       const endDay = async () => {
         if (!mySession) return;
-        await FB.addHistory({ ...mySession, id: mySessionId });
+        let finalBins = mySession.bins || [];
+        if (mySession.currentBin) {
+          const { weight: bw, count: bc } = calcBinWeight(mySession, mySession.currentBin);
+          finalBins = [...finalBins, { number: mySession.currentBin, totalWeight: bw, bucketCount: bc, closedAt: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) }];
+        }
+        await FB.addHistory({ ...mySession, bins: finalBins, id: mySessionId });
         await FB.deleteSession(mySessionId);
         localStorage.removeItem("picker_sessionId");
         setMySessionId("");
         setSelectedPickers([]);
+        setFirstBin("");
         setScreen("setup");
         notify("Day saved to history", "success");
         setConfirmAction(null);
@@ -367,6 +395,20 @@
 
           {notification && (<div style={{ position: "fixed", top: 60, left: "50%", transform: "translateX(-50%)", padding: "10px 24px", borderRadius: 10, background: notification.type === "error" ? C.red : notification.type === "success" ? C.green : C.surfaceAlt, color: C.white, fontWeight: 700, fontSize: 14, zIndex: 999, boxShadow: "0 8px 30px rgba(0,0,0,0.4)", animation: "fadeIn 0.2s ease", whiteSpace: "nowrap" }}>{notification.msg}</div>)}
 
+          {showNextBin && (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, maxWidth: 360, width: "90%" }}>
+                <p style={{ color: C.text, fontSize: 15, marginBottom: 4, fontWeight: 700 }}>Close Bin {mySession?.currentBin}</p>
+                <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 16 }}>Enter the next bin number to start filling:</p>
+                <input autoFocus type="text" placeholder="e.g. BIN002" value={nextBinVal} onChange={(e) => setNextBinVal(e.target.value.toUpperCase())} onKeyDown={(e) => e.key === "Enter" && closeCurrentBin()} style={{ ...inputBase, width: "100%", marginBottom: 16, textTransform: "uppercase" }} />
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => { setShowNextBin(false); setNextBinVal(""); }} style={{ ...baseBtn, padding: "10px 20px", background: C.surfaceAlt, color: C.textDim, fontSize: 14 }}>Cancel</button>
+                  <button onClick={closeCurrentBin} style={{ ...baseBtn, padding: "10px 20px", background: C.accent, color: C.bg, fontSize: 14 }}>Next Bin →</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {confirmAction && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 28, maxWidth: 400, width: "90%" }}>
               <p style={{ color: C.text, fontSize: 16, marginBottom: 20 }}>{confirmAction.msg}</p>
@@ -425,8 +467,12 @@
                       );
                     })}
                   </div>
-                  <button onClick={startDay} disabled={selectedPickers.length === 0}
-                    style={{ ...baseBtn, width: "100%", padding: "16px", fontSize: 18, background: selectedPickers.length > 0 ? C.green : C.surfaceAlt, color: selectedPickers.length > 0 ? C.white : C.textMuted }}>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", color: C.textMuted, fontSize: 11, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Starting Bin Number</label>
+                    <input placeholder="e.g. BIN001" value={firstBin} onChange={(e) => setFirstBin(e.target.value)} onKeyDown={(e) => e.key === "Enter" && startDay()} style={{ ...inputBase, width: "100%", fontSize: 15, textTransform: "uppercase" }} />
+                  </div>
+                  <button onClick={startDay} disabled={selectedPickers.length === 0 || !firstBin.trim()}
+                    style={{ ...baseBtn, width: "100%", padding: "16px", fontSize: 18, background: selectedPickers.length > 0 && firstBin.trim() ? C.green : C.surfaceAlt, color: selectedPickers.length > 0 && firstBin.trim() ? C.white : C.textMuted }}>
                     ▶ Start Day ({selectedPickers.length} picker{selectedPickers.length !== 1 ? "s" : ""})
                   </button>
                 </>
@@ -448,6 +494,19 @@
                   <button onClick={() => setConfirmAction({ msg: "End the day and save all data?", confirmLabel: "End Day", onConfirm: endDay })}
                     style={{ ...baseBtn, padding: "10px 20px", background: C.red, color: C.white, fontSize: 14 }}>■ End Day</button>
                 </div>
+                {mySession.currentBin && (() => {
+                  const { weight: cbw, count: cbc } = calcBinWeight(mySession, mySession.currentBin);
+                  return (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.surfaceAlt, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+                      <div>
+                        <div style={{ color: C.textMuted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Current Bin</div>
+                        <div style={{ color: C.accent, fontWeight: 800, fontSize: 22 }}>{mySession.currentBin}</div>
+                        <div style={{ color: C.textMuted, fontSize: 11 }}>{cbc} bucket{cbc !== 1 ? "s" : ""} — {cbw.toFixed(1)} kg so far{(mySession.bins || []).length > 0 ? ` · ${(mySession.bins || []).length} bin${(mySession.bins || []).length !== 1 ? "s" : ""} filled` : ""}</div>
+                      </div>
+                      <button onClick={() => setShowNextBin(true)} style={{ ...baseBtn, padding: "10px 18px", background: C.blue, color: C.white, fontSize: 13 }}>Next Bin →</button>
+                    </div>
+                  );
+                })()}
                 <div style={{ overflowX: "auto", borderRadius: 12, border: `1px solid ${C.border}` }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ background: C.surfaceAlt }}>
@@ -494,6 +553,23 @@
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE*100).toFixed(0)}%)</span><span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{(g * WASTAGE_RATE).toFixed(1)} kg</span></div>
                     <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>GRAND NETT</span><span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{(g * (1 - WASTAGE_RATE)).toFixed(1)} kg</span></div>
                   </div>); })()}
+                {(mySession.bins || []).length > 0 && (
+                  <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" }}>
+                    <div style={{ color: C.textMuted, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Bins Filled Today</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {(mySession.bins || []).map((bin, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.surfaceAlt, borderRadius: 8 }}>
+                          <div>
+                            <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>Bin {bin.number}</span>
+                            <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 8 }}>{bin.bucketCount} bucket{bin.bucketCount !== 1 ? "s" : ""}</span>
+                            {bin.closedAt && <span style={{ color: C.textMuted, fontSize: 10, marginLeft: 8 }}>closed {bin.closedAt}</span>}
+                          </div>
+                          <span style={{ color: C.green, fontWeight: 800, fontSize: 15 }}>{bin.totalWeight.toFixed(1)} kg</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>);
           })()}
 
@@ -528,19 +604,36 @@
                     const vt = vp.reduce((s, pid) => s + pickerTotal(day.entries, pid), 0);
                     return (
                       <div key={di} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-                        <button onClick={() => setExpandedDay(isExp ? null : di)} style={{ ...baseBtn, width: "100%", padding: "14px 18px", background: "transparent", borderRadius: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <div style={{ textAlign: "left" }}>
-                            <div style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{formatDate(day.date)}</div>
-                            <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{vp.length} picker{vp.length !== 1 ? "s" : ""}{day.contractorName ? ` — ${day.contractorName}` : ""}</div>
-                          </div>
-                          <div style={{ textAlign: "right" }}>
-                            <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {vt.toFixed(1)} kg</div>
-                            <div style={{ color: C.green, fontWeight: 800, fontSize: 18 }}>Nett: {(vt * (1 - WASTAGE_RATE)).toFixed(1)} kg</div>
-                            <div style={{ color: C.textMuted, fontSize: 11 }}>{isExp ? "▲ collapse" : "▼ details"}</div>
-                          </div>
-                        </button>
+                        <div style={{ display: "flex", alignItems: "stretch" }}>
+                          <button onClick={() => setExpandedDay(isExp ? null : di)} style={{ ...baseBtn, flex: 1, padding: "14px 18px", background: "transparent", borderRadius: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ textAlign: "left" }}>
+                              <div style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{formatDate(day.date)}</div>
+                              <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{vp.length} picker{vp.length !== 1 ? "s" : ""}{day.contractorName ? ` — ${day.contractorName}` : ""}</div>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {vt.toFixed(1)} kg</div>
+                              <div style={{ color: C.green, fontWeight: 800, fontSize: 18 }}>Nett: {(vt * (1 - WASTAGE_RATE)).toFixed(1)} kg</div>
+                              <div style={{ color: C.textMuted, fontSize: 11 }}>{isExp ? "▲ collapse" : "▼ details"}</div>
+                            </div>
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); buildExcel([day], { picker: "", dateFrom: "", dateTo: "" }); notify("Excel saved to Downloads", "success"); }} title="Export this session" style={{ ...baseBtn, padding: "0 16px", background: C.surfaceAlt, color: C.green, fontSize: 18, borderRadius: 0, borderLeft: `1px solid ${C.border}`, flexShrink: 0 }}>⤓</button>
+                        </div>
                         {isExp && (
                           <div style={{ padding: "0 16px 16px", borderTop: `1px solid ${C.border}` }}>
+                            {(day.bins || []).length > 0 && (
+                              <div style={{ marginTop: 12, marginBottom: 4 }}>
+                                <div style={{ color: C.textMuted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Bins</div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                  {(day.bins || []).map((bin, i) => (
+                                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: C.surfaceAlt, borderRadius: 8, fontSize: 12 }}>
+                                      <span style={{ color: C.accent, fontWeight: 700 }}>Bin {bin.number}</span>
+                                      <span style={{ color: C.textMuted }}>{bin.bucketCount} bkts</span>
+                                      <span style={{ color: C.green, fontWeight: 700 }}>{bin.totalWeight.toFixed(1)} kg</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             <div style={{ overflowX: "auto", marginTop: 12 }}>
                               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                                 <thead><tr>
@@ -604,6 +697,8 @@
                             <div>
                               <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{sess.contractorName || sess.contractorEmail}</span>
                               <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 10 }}>{sess.activePickers.length} picker{sess.activePickers.length !== 1 ? "s" : ""}</span>
+                              {sess.currentBin && <span style={{ color: C.accent, fontSize: 12, fontWeight: 700, marginLeft: 12 }}>Bin: {sess.currentBin}</span>}
+                              {(sess.bins || []).length > 0 && <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 8 }}>({(sess.bins || []).length} filled)</span>}
                             </div>
                             <div style={{ textAlign: "right" }}>
                               <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {sessGross.toFixed(1)} kg</div>
