@@ -252,11 +252,12 @@
 
       // Build map of which pickers are taken by OTHER sessions
       const takenPickers = {};
+      const knownPickerIds = new Set(pickers.map((p) => p.id));
       Object.entries(sessions).forEach(([sid, sess]) => {
         if (sid === mySessionId) return; // skip my own
         if (sess.date !== today()) return; // skip stale sessions
         (sess.activePickers || []).forEach((pid) => {
-          takenPickers[pid] = sess.contractorName || sess.contractorEmail || "Another contractor";
+          if (knownPickerIds.has(pid)) takenPickers[pid] = sess.contractorName || sess.contractorEmail || "Another contractor";
         });
       });
 
