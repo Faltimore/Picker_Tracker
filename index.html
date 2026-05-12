@@ -34,12 +34,12 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script>
     firebase.initializeApp({
-      apiKey: "AIzaSyBK_OqBbOQGhlPM9MaE4tFIaTBYpmn3Olg",
-      authDomain: "picker-tracker-3c8ea.firebaseapp.com",
-      projectId: "picker-tracker-3c8ea",
-      storageBucket: "picker-tracker-3c8ea.firebasestorage.app",
-      messagingSenderId: "698227230275",
-      appId: "1:698227230275:web:025cd2853c5038f11fb6f6"
+      apiKey: "AIzaSyA4dVQWhtmG96lcLDUQymFTNkW5ewjOhZQ",
+      authDomain: "nashys-pickers.firebaseapp.com",
+      projectId: "nashys-pickers",
+      storageBucket: "nashys-pickers.firebasestorage.app",
+      messagingSenderId: "710025031050",
+      appId: "1:710025031050:web:42905861861e9d90c32c73"
     });
     var auth = firebase.auth();
     var db = firebase.firestore();
@@ -52,8 +52,7 @@
     const today = () => new Date().toISOString().split("T")[0];
     const formatDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
     const genId = () => Math.random().toString(36).substr(2, 8);
-    const WASTAGE_RATE = 0.10;
-    const ADMIN_EMAILS = ["anna@placeholder.com"];
+    const ADMIN_EMAILS = ["anna@nashysfarm.com"];
 
     const C = {
       bg: "#1a1e2a", surface: "#232838", surfaceAlt: "#2a3045",
@@ -122,18 +121,71 @@
         vp.forEach((pid, ci) => { const t = pickerTotal(day.entries, pid); gg += t; ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat(t.toFixed(1)), s: gs }; });
         ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat(gg.toFixed(1)), s: gs };
         startRow++;
-        const wst = { font: { bold: true, color: { rgb: "E05555" } }, alignment: { horizontal: "center" } };
-        ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "WASTAGE (10%)", s: wst };
-        vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((-pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)), s: wst }; });
-        ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((-gg * WASTAGE_RATE).toFixed(1)), s: wst };
-        startRow++;
-        const ns = { font: { bold: true, sz: 13, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } };
-        ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "NETT", s: ns };
-        vp.forEach((pid, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci + 1 })] = { v: parseFloat((pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)), s: ns }; });
-        ws[XLSX.utils.encode_cell({ r: startRow, c: vp.length + 1 })] = { v: parseFloat((gg * (1 - WASTAGE_RATE)).toFixed(1)), s: ns };
-        startRow++;
+        const bins = day.bins || [];
+        if (bins.length > 0) {
+          startRow++;
+          if (!ws["!merges"]) ws["!merges"] = [];
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "BIN DETAILS", s: { font: { bold: true, sz: 10, color: { rgb: "8892A8" } } } };
+          ws["!merges"].push({ s: { r: startRow, c: 0 }, e: { r: startRow, c: 3 } });
+          startRow++;
+          const bh = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "353B50" } }, alignment: { horizontal: "center" } };
+          ["Bin", "Gross kg", "Buckets", "Closed"].forEach((h, ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci })] = { v: h, s: bh }; });
+          startRow++;
+          let btw = 0, btc = 0;
+          bins.forEach((bin, bi) => {
+            const brs = bi % 2 === 0 ? ds : as;
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: bin.number, s: brs };
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 1 })] = { v: parseFloat(bin.totalWeight.toFixed(1)), s: brs };
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 2 })] = { v: bin.bucketCount, s: brs };
+            ws[XLSX.utils.encode_cell({ r: startRow, c: 3 })] = { v: bin.closedAt || "", s: brs };
+            btw += bin.totalWeight; btc += bin.bucketCount; startRow++;
+          });
+          const bts = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "Total", s: bts };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 1 })] = { v: parseFloat(btw.toFixed(1)), s: bts };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 2 })] = { v: btc, s: bts };
+          startRow++;
+        }
         const mc = vp.length + 1; const cr = ws["!ref"]; const nr = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: startRow - 1, c: mc } });
         ws["!ref"] = cr ? (XLSX.utils.decode_range(cr).e.r < startRow - 1 || XLSX.utils.decode_range(cr).e.c < mc ? nr : cr) : nr;
+        return startRow + 1;
+      };
+      const buildAggregateTable = (ws, label, days, startRow) => {
+        const allP = new Map(); let validDays = 0;
+        days.forEach((day) => {
+          const vp = pickerFilter ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter)) : day.activePickers;
+          if (vp.length === 0) return;
+          validDays++;
+          vp.forEach((pid) => {
+            if (!allP.has(pid)) allP.set(pid, { name: day.pickerNames[pid] || pid, kg: 0, bk: 0, days: 0 });
+            const p = allP.get(pid); p.kg += pickerTotal(day.entries, pid); p.bk += (day.entries[pid] || []).length; p.days++;
+          });
+        });
+        if (allP.size === 0) return startRow;
+        if (!ws["!merges"]) ws["!merges"] = [];
+        ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: label, s: { font: { bold: true, sz: 13, color: { rgb: "E8A838" } } } };
+        ws["!merges"].push({ s: { r: startRow, c: 0 }, e: { r: startRow, c: 5 } });
+        startRow++;
+        const hdr = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
+        const hdrL = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "left" } };
+        ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: "Picker", s: hdrL };
+        ["Days", "Buckets", "Gross kg"].forEach((h, i) => { ws[XLSX.utils.encode_cell({ r: startRow, c: i + 1 })] = { v: h, s: hdr }; });
+        startRow++;
+        let totKg = 0, totBk = 0;
+        const ct = { alignment: { horizontal: "center" } };
+        allP.forEach((p) => {
+          totKg += p.kg; totBk += p.bk;
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 0 })] = { v: p.name };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 1 })] = { v: p.days, s: ct };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 2 })] = { v: p.bk, s: ct };
+          ws[XLSX.utils.encode_cell({ r: startRow, c: 3 })] = { v: parseFloat(p.kg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } };
+          startRow++;
+        });
+        const ts = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "E8A838" } }, alignment: { horizontal: "center" } };
+        [["TOTAL", ts], [validDays, ts], [totBk, ts], [parseFloat(totKg.toFixed(1)), ts]].forEach(([v, s], ci) => { ws[XLSX.utils.encode_cell({ r: startRow, c: ci })] = { v, s }; });
+        startRow++;
+        const cr2 = ws["!ref"]; const nr2 = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: startRow - 1, c: 3 } });
+        ws["!ref"] = cr2 ? (XLSX.utils.decode_range(cr2).e.r < startRow - 1 || XLSX.utils.decode_range(cr2).e.c < 5 ? nr2 : cr2) : nr2;
         return startRow + 1;
       };
       const grpWeek = (days) => { const w = {}; days.forEach((d) => { const dt = new Date(d.date + "T12:00:00"); const j = new Date(dt.getFullYear(), 0, 1); const wn = Math.ceil(((dt - j) / 86400000 + j.getDay() + 1) / 7); const k = `Week ${wn} (${dt.getFullYear()})`; if (!w[k]) w[k] = []; w[k].push(d); }); return w; };
@@ -143,22 +195,23 @@
       // Daily
       const wsD = {}; let r = 0; wsD[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Daily Picking Records", s: { font: { bold: true, sz: 16 } } }; wsD["!ref"] = "A1"; r = 2;
       data.forEach((d) => { r = buildDayTable(wsD, d, r); }); wsD["!cols"] = cols; XLSX.utils.book_append_sheet(wb, wsD, "Daily");
-      // Weekly
+      // Weekly — one aggregated picker summary per week
+      const aggCols = [{ wch: 22 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
       const wks = grpWeek(data); const wsW = {}; r = 0; wsW[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Weekly Summary", s: { font: { bold: true, sz: 16 } } }; wsW["!ref"] = "A1"; r = 2;
-      Object.entries(wks).forEach(([l, ds]) => { wsW[XLSX.utils.encode_cell({ r: r, c: 0 })] = { v: l, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } }; wsW["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r, c: 20 } }); r++; ds.forEach((d) => { r = buildDayTable(wsW, d, r); }); r++; }); wsW["!cols"] = cols; XLSX.utils.book_append_sheet(wb, wsW, "Weekly");
-      // Monthly
+      Object.entries(wks).forEach(([l, ds]) => { r = buildAggregateTable(wsW, l, ds, r); }); wsW["!cols"] = aggCols; XLSX.utils.book_append_sheet(wb, wsW, "Weekly");
+      // Monthly — one aggregated picker summary per month
       const mos = grpMonth(data); const wsM = {}; r = 0; wsM[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Monthly Summary", s: { font: { bold: true, sz: 16 } } }; wsM["!ref"] = "A1"; r = 2;
-      Object.entries(mos).forEach(([l, ds]) => { wsM[XLSX.utils.encode_cell({ r: r, c: 0 })] = { v: l, s: { font: { bold: true, sz: 14, color: { rgb: "E8A838" } } } }; wsM["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r, c: 20 } }); r++; ds.forEach((d) => { r = buildDayTable(wsM, d, r); }); r++; }); wsM["!cols"] = cols; XLSX.utils.book_append_sheet(wb, wsM, "Monthly");
+      Object.entries(mos).forEach(([l, ds]) => { r = buildAggregateTable(wsM, l, ds, r); }); wsM["!cols"] = aggCols; XLSX.utils.book_append_sheet(wb, wsM, "Monthly");
       // Summary
       const wsS = {}; const allP = new Map(); r = 0;
       data.forEach((day) => { const vp = pickerFilter ? day.activePickers.filter((pid) => (day.pickerNames[pid] || "").toLowerCase().includes(pickerFilter)) : day.activePickers; vp.forEach((pid) => { if (!allP.has(pid)) allP.set(pid, { name: day.pickerNames[pid] || pid, totalKg: 0, totalBuckets: 0, days: 0 }); const i = allP.get(pid); i.totalKg += pickerTotal(day.entries, pid); i.totalBuckets += (day.entries[pid] || []).length; i.days++; }); });
       wsS[XLSX.utils.encode_cell({ r: 0, c: 0 })] = { v: "Picker Summary", s: { font: { bold: true, sz: 16 } } }; r = 2;
       const sh = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "2A3045" } }, alignment: { horizontal: "center" } };
-      ["Picker", "Days", "Buckets", "Gross kg", "Wastage", "Nett kg", "Avg Nett/Day", "Avg Nett/Bkt"].forEach((h, ci) => { wsS[XLSX.utils.encode_cell({ r, c: ci })] = { v: h, s: sh }; }); r++;
+      ["Picker", "Days", "Buckets", "Gross kg", "Avg Gross/Day", "Avg Gross/Bkt"].forEach((h, ci) => { wsS[XLSX.utils.encode_cell({ r, c: ci })] = { v: h, s: sh }; }); r++;
       const ct = { alignment: { horizontal: "center" } };
-      allP.forEach((i) => { const w = i.totalKg * WASTAGE_RATE; const n = i.totalKg * (1 - WASTAGE_RATE); wsS[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i.name }; wsS[XLSX.utils.encode_cell({ r, c: 1 })] = { v: i.days, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 2 })] = { v: i.totalBuckets, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 3 })] = { v: parseFloat(i.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r, c: 4 })] = { v: parseFloat((-w).toFixed(1)), s: { font: { color: { rgb: "E05555" } }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r, c: 5 })] = { v: parseFloat(n.toFixed(1)), s: { font: { bold: true, color: { rgb: "4CAF82" } }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r, c: 6 })] = { v: i.days > 0 ? parseFloat((n / i.days).toFixed(1)) : 0, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 7 })] = { v: i.totalBuckets > 0 ? parseFloat((n / i.totalBuckets).toFixed(1)) : 0, s: ct }; r++; });
-      wsS["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: 7 } });
-      wsS["!cols"] = [{ wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+      allP.forEach((i) => { wsS[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i.name }; wsS[XLSX.utils.encode_cell({ r, c: 1 })] = { v: i.days, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 2 })] = { v: i.totalBuckets, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 3 })] = { v: parseFloat(i.totalKg.toFixed(1)), s: { font: { bold: true }, alignment: { horizontal: "center" } } }; wsS[XLSX.utils.encode_cell({ r, c: 4 })] = { v: i.days > 0 ? parseFloat((i.totalKg / i.days).toFixed(1)) : 0, s: ct }; wsS[XLSX.utils.encode_cell({ r, c: 5 })] = { v: i.totalBuckets > 0 ? parseFloat((i.totalKg / i.totalBuckets).toFixed(1)) : 0, s: ct }; r++; });
+      wsS["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: 5 } });
+      wsS["!cols"] = [{ wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, wsS, "Picker Summary");
       XLSX.writeFile(wb, `picking-records-${today()}.xlsx`);
     }
@@ -251,9 +304,9 @@
 
       // ─── Actions ───
       const addPicker = async () => {
-        if (!newName.trim()) return notify("Name required", "error");
-        if (pickers.find((p) => p.idCode === newId.trim() && newId.trim())) return notify("ID already exists", "error");
-        await FB.savePickers([...pickers, { id: genId(), name: newName.trim(), idCode: newId.trim() || `P${pickers.length + 1}` }]);
+        if (!newId.trim()) return notify("ID required", "error");
+        if (pickers.find((p) => p.idCode === newId.trim())) return notify("ID already exists", "error");
+        await FB.savePickers([...pickers, { id: genId(), name: newName.trim(), idCode: newId.trim() }]);
         setNewName(""); setNewId(""); notify("Picker added", "success");
       };
       const removePicker = async (id) => { await FB.savePickers(pickers.filter((p) => p.id !== id)); notify("Picker removed"); };
@@ -273,7 +326,7 @@
         selectedPickers.forEach((pid) => {
           s.entries[pid] = [];
           const pk = pickers.find((p) => p.id === pid);
-          s.pickerNames[pid] = pk ? `${pk.name} (${pk.idCode})` : pid;
+          s.pickerNames[pid] = pk ? (pk.name ? `${pk.name} (${pk.idCode})` : pk.idCode) : pid;
         });
         await FB.saveSession(sessionId, s);
         localStorage.setItem("picker_sessionId", sessionId);
@@ -536,22 +589,12 @@
                         <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 11 }}>GROSS</td>
                         {ap.map((pid) => { const t = pickerTotal(entries, pid); return (<td key={pid} style={{ padding: "10px 8px", textAlign: "center", borderTop: `2px solid ${C.accent}` }}><div style={{ color: C.accent, fontWeight: 800, fontSize: 16 }}>{t.toFixed(1)} kg</div><div style={{ color: C.textMuted, fontSize: 10 }}>{(entries[pid] || []).length} buckets</div></td>); })}
                       </tr>
-                      <tr style={{ background: C.surface }}>
-                        <td style={{ padding: "8px 12px", color: C.red, fontWeight: 700, fontSize: 11 }}>WASTAGE</td>
-                        {ap.map((pid) => (<td key={pid} style={{ padding: "8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 14 }}>-{(pickerTotal(entries, pid) * WASTAGE_RATE).toFixed(1)} kg</td>))}
-                      </tr>
-                      <tr style={{ background: C.surfaceAlt }}>
-                        <td style={{ padding: "10px 12px", color: C.green, fontWeight: 800, fontSize: 11 }}>NETT</td>
-                        {ap.map((pid) => (<td key={pid} style={{ padding: "10px 8px", textAlign: "center", color: C.green, fontWeight: 800, fontSize: 18 }}>{(pickerTotal(entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)} kg</td>))}
-                      </tr>
                     </tbody>
                   </table>
                 </div>
                 {(() => { const g = ap.reduce((s, pid) => s + pickerTotal(entries, pid), 0); return (
                   <div style={{ marginTop: 16, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ color: C.accent, fontWeight: 700, fontSize: 13 }}>GRAND GROSS</span><span style={{ color: C.accent, fontWeight: 800, fontSize: 20 }}>{g.toFixed(1)} kg</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE*100).toFixed(0)}%)</span><span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{(g * WASTAGE_RATE).toFixed(1)} kg</span></div>
-                    <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>GRAND NETT</span><span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{(g * (1 - WASTAGE_RATE)).toFixed(1)} kg</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ color: C.accent, fontWeight: 700, fontSize: 14 }}>GRAND GROSS</span><span style={{ color: C.accent, fontWeight: 800, fontSize: 24 }}>{g.toFixed(1)} kg</span></div>
                   </div>); })()}
                 {(mySession.bins || []).length > 0 && (
                   <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" }}>
@@ -589,7 +632,7 @@
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <span style={{ color: C.textDim, fontSize: 13 }}>
                   {isFiltered ? `Showing ${filtered.length} of ${history.length} session${history.length !== 1 ? "s" : ""}` : `${history.length} session${history.length !== 1 ? "s" : ""} recorded`}
-                  {filtered.length > 0 && (() => { const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : ""; const total = filtered.reduce((s, d) => { const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers; return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0); }, 0); return ` — Gross: ${total.toFixed(1)} / Nett: ${(total * (1 - WASTAGE_RATE)).toFixed(1)} kg`; })()}
+                  {filtered.length > 0 && (() => { const pf = historyFilter.picker ? historyFilter.picker.toLowerCase() : ""; const total = filtered.reduce((s, d) => { const vp = pf ? d.activePickers.filter((pid) => (d.pickerNames[pid] || "").toLowerCase().includes(pf)) : d.activePickers; return s + vp.reduce((ss, pid) => ss + pickerTotal(d.entries, pid), 0); }, 0); return ` — Gross: ${total.toFixed(1)} kg`; })()}
                 </span>
                 <button onClick={() => exportExcel(filtered)} disabled={filtered.length === 0} style={{ ...baseBtn, padding: "10px 18px", background: filtered.length > 0 ? C.green : C.surfaceAlt, color: filtered.length > 0 ? C.white : C.textMuted, fontSize: 13 }}>⤓ Export {isFiltered ? "Filtered" : "All"}</button>
               </div>
@@ -611,8 +654,7 @@
                               <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{vp.length} picker{vp.length !== 1 ? "s" : ""}{day.contractorName ? ` — ${day.contractorName}` : ""}</div>
                             </div>
                             <div style={{ textAlign: "right" }}>
-                              <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {vt.toFixed(1)} kg</div>
-                              <div style={{ color: C.green, fontWeight: 800, fontSize: 18 }}>Nett: {(vt * (1 - WASTAGE_RATE)).toFixed(1)} kg</div>
+                              <div style={{ color: C.accent, fontWeight: 800, fontSize: 18 }}>{vt.toFixed(1)} kg</div>
                               <div style={{ color: C.textMuted, fontSize: 11 }}>{isExp ? "▲ collapse" : "▼ details"}</div>
                             </div>
                           </button>
@@ -649,14 +691,6 @@
                                   <tr style={{ background: C.surfaceAlt }}>
                                     <td style={{ padding: 8, color: C.accent, fontWeight: 800, borderTop: `2px solid ${C.accent}`, fontSize: 10 }}>GROSS</td>
                                     {vp.map((pid) => (<td key={pid} style={{ padding: 8, textAlign: "center", borderTop: `2px solid ${C.accent}`, color: C.accent, fontWeight: 800, fontSize: 13 }}>{pickerTotal(day.entries, pid).toFixed(1)} kg<div style={{ fontSize: 9, color: C.textMuted, fontWeight: 400 }}>{(day.entries[pid] || []).length} bkts</div></td>))}
-                                  </tr>
-                                  <tr style={{ background: C.surface }}>
-                                    <td style={{ padding: "6px 8px", color: C.red, fontWeight: 700, fontSize: 10 }}>WASTAGE</td>
-                                    {vp.map((pid) => (<td key={pid} style={{ padding: "6px 8px", textAlign: "center", color: C.red, fontWeight: 700, fontSize: 12 }}>-{(pickerTotal(day.entries, pid) * WASTAGE_RATE).toFixed(1)}</td>))}
-                                  </tr>
-                                  <tr style={{ background: C.surfaceAlt }}>
-                                    <td style={{ padding: 8, color: C.green, fontWeight: 800, fontSize: 10 }}>NETT</td>
-                                    {vp.map((pid) => (<td key={pid} style={{ padding: 8, textAlign: "center", color: C.green, fontWeight: 800, fontSize: 14 }}>{(pickerTotal(day.entries, pid) * (1 - WASTAGE_RATE)).toFixed(1)}</td>))}
                                   </tr>
                                 </tbody>
                               </table>
@@ -701,8 +735,7 @@
                               {(sess.bins || []).length > 0 && <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 8 }}>({(sess.bins || []).length} filled)</span>}
                             </div>
                             <div style={{ textAlign: "right" }}>
-                              <div style={{ color: C.textMuted, fontSize: 11 }}>Gross: {sessGross.toFixed(1)} kg</div>
-                              <div style={{ color: C.green, fontWeight: 800, fontSize: 15 }}>Nett: {(sessGross * (1 - WASTAGE_RATE)).toFixed(1)} kg</div>
+                              <div style={{ color: C.accent, fontWeight: 800, fontSize: 15 }}>{sessGross.toFixed(1)} kg</div>
                             </div>
                           </div>
                           <div style={{ overflowX: "auto" }}>
@@ -711,7 +744,6 @@
                                 <th style={{ padding: "8px 14px", color: C.textMuted, fontWeight: 600, textAlign: "left", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>Picker</th>
                                 <th style={{ padding: "8px 12px", color: C.textMuted, fontWeight: 600, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>Buckets</th>
                                 <th style={{ padding: "8px 12px", color: C.accent, fontWeight: 700, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>Gross kg</th>
-                                <th style={{ padding: "8px 12px", color: C.green, fontWeight: 700, textAlign: "center", borderBottom: `1px solid ${C.border}`, fontSize: 11 }}>Nett kg</th>
                               </tr></thead>
                               <tbody>
                                 {sess.activePickers.map((pid, i) => {
@@ -721,7 +753,6 @@
                                       <td style={{ padding: "9px 14px", color: C.text, fontWeight: 600 }}>{sess.pickerNames[pid] || pid}</td>
                                       <td style={{ padding: "9px 12px", color: C.textDim, textAlign: "center" }}>{(sess.entries[pid] || []).length}</td>
                                       <td style={{ padding: "9px 12px", color: C.accent, fontWeight: 700, textAlign: "center" }}>{gross.toFixed(1)}</td>
-                                      <td style={{ padding: "9px 12px", color: C.green, fontWeight: 700, textAlign: "center" }}>{(gross * (1 - WASTAGE_RATE)).toFixed(1)}</td>
                                     </tr>
                                   );
                                 })}
@@ -735,9 +766,7 @@
                 )}
                 {todaySessions.length > 0 && (
                   <div style={{ marginTop: 20, background: C.accentGlow, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "16px 20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ color: C.accent, fontWeight: 700, fontSize: 13 }}>ALL SESSIONS GROSS</span><span style={{ color: C.accent, fontWeight: 800, fontSize: 20 }}>{grandGross.toFixed(1)} kg</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ color: C.red, fontWeight: 700, fontSize: 13 }}>WASTAGE ({(WASTAGE_RATE * 100).toFixed(0)}%)</span><span style={{ color: C.red, fontWeight: 700, fontSize: 16 }}>-{(grandGross * WASTAGE_RATE).toFixed(1)} kg</span></div>
-                    <div style={{ borderTop: `1px solid ${C.accent}`, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ color: C.green, fontWeight: 700, fontSize: 14 }}>ALL SESSIONS NETT</span><span style={{ color: C.green, fontWeight: 800, fontSize: 24 }}>{(grandGross * (1 - WASTAGE_RATE)).toFixed(1)} kg</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ color: C.accent, fontWeight: 700, fontSize: 14 }}>ALL SESSIONS GROSS</span><span style={{ color: C.accent, fontWeight: 800, fontSize: 24 }}>{grandGross.toFixed(1)} kg</span></div>
                   </div>
                 )}
               </div>
@@ -750,8 +779,8 @@
               <h2 style={{ color: C.accent, fontSize: 20, marginBottom: 16 }}>Manage Pickers</h2>
               <div style={{ background: C.surfaceAlt, borderRadius: 12, padding: 18, marginBottom: 20, border: `1px solid ${C.border}` }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <input placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 2, minWidth: 140 }} />
-                  <input placeholder="ID (optional)" value={newId} onChange={(e) => setNewId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 1, minWidth: 100 }} />
+                  <input placeholder="ID" value={newId} onChange={(e) => setNewId(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 1, minWidth: 100 }} />
+                  <input placeholder="Name (optional)" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPicker()} style={{ ...inputBase, flex: 2, minWidth: 140 }} />
                   <button onClick={addPicker} style={{ ...baseBtn, padding: "12px 20px", background: C.green, color: C.white, fontSize: 14 }}>+ Add</button>
                 </div>
               </div>
@@ -759,7 +788,7 @@
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {pickers.map((p) => (
                     <div key={p.id} style={{ display: "flex", alignItems: "center", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px" }}>
-                      <div style={{ flex: 1 }}><span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{p.name}</span><span style={{ color: C.textMuted, fontSize: 12, marginLeft: 10 }}>ID: {p.idCode}</span></div>
+                      <div style={{ flex: 1 }}><span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{p.idCode}</span>{p.name && <span style={{ color: C.textMuted, fontSize: 12, marginLeft: 10 }}>{p.name}</span>}</div>
                       <button onClick={() => setConfirmAction({ msg: `Remove ${p.name}? History is kept.`, confirmLabel: "Remove", onConfirm: () => { removePicker(p.id); setConfirmAction(null); } })}
                         style={{ ...baseBtn, padding: "8px 14px", background: C.surfaceAlt, color: C.redDim, fontSize: 12, border: `1px solid ${C.border}` }}>Remove</button>
                     </div>))}
